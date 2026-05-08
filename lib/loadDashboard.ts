@@ -19,12 +19,12 @@ interface ClientRow {
   weekly_target: number;
   start_date: string | null;
   instantly_campaign_ids: string[];
-  masterinbox_identifier: string | null;
   campaign_size: number;
 }
 
 export async function loadDashboardClients(): Promise<{
   clients: DashboardClient[];
+  allInstantlyCampaigns: InstantlyCampaign[];
   source: 'supabase' | 'seed';
   error?: string;
 }> {
@@ -32,7 +32,12 @@ export async function loadDashboardClients(): Promise<{
   try {
     sb = getSupabase();
   } catch (err) {
-    return { clients: generateSeed(), source: 'seed', error: (err as Error).message };
+    return {
+      clients: generateSeed(),
+      allInstantlyCampaigns: [],
+      source: 'seed',
+      error: (err as Error).message,
+    };
   }
 
   // Sliding window: this Monday minus N-1 weeks.
@@ -45,11 +50,17 @@ export async function loadDashboardClients(): Promise<{
   ]);
 
   if (clientsRes.error) {
-    return { clients: generateSeed(), source: 'seed', error: clientsRes.error.message };
+    return {
+      clients: generateSeed(),
+      allInstantlyCampaigns: [],
+      source: 'seed',
+      error: clientsRes.error.message,
+    };
   }
 
+  const allInstantlyCampaigns = (campaignsRes.data ?? []) as InstantlyCampaign[];
   const clients = (clientsRes.data ?? []) as ClientRow[];
-  if (clients.length === 0) return { clients: [], source: 'supabase' };
+  if (clients.length === 0) return { clients: [], allInstantlyCampaigns, source: 'supabase' };
 
   const metricsByClient = new Map<string, Record<string, WeeklyMetric>>();
   for (const m of (metricsRes.data ?? []) as WeeklyMetric[]) {
@@ -77,12 +88,11 @@ export async function loadDashboardClients(): Promise<{
       weekly_target: c.weekly_target,
       start_date: c.start_date,
       instantly_campaign_ids: c.instantly_campaign_ids ?? [],
-      masterinbox_identifier: c.masterinbox_identifier,
       campaign_size: c.campaign_size ?? 0,
       campaigns: linkedCampaigns,
       metricsByWeek: metricsByClient.get(c.id) ?? {},
     };
   });
 
-  return { clients: dashboardClients, source: 'supabase' };
+  return { clients: dashboardClients, allInstantlyCampaigns, source: 'supabase' };
 }

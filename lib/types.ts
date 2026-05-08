@@ -18,7 +18,6 @@ export interface Client {
   weekly_target: number;
   start_date: string | null; // ISO date
   instantly_campaign_ids: string[];
-  masterinbox_identifier: string | null;
   campaign_size: number;
 }
 

@@ -22,7 +22,6 @@ export async function POST(req: NextRequest) {
       weekly_target: body.weekly_target,
       start_date: body.start_date ?? null,
       instantly_campaign_ids: body.instantly_campaign_ids ?? [],
-      masterinbox_identifier: body.masterinbox_identifier ?? null,
       campaign_size: body.campaign_size ?? 0,
     })
     .select()
@@ -43,7 +42,6 @@ export async function PATCH(req: NextRequest) {
       weekly_target: body.weekly_target,
       start_date: body.start_date,
       instantly_campaign_ids: body.instantly_campaign_ids,
-      masterinbox_identifier: body.masterinbox_identifier,
     })
     .eq('id', body.id)
     .select()

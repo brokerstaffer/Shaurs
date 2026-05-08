@@ -25,7 +25,6 @@ export function generateSeed(): DashboardClient[] {
       weekly_target: 6,
       start_date: '2026-02-10',
       instantly_campaign_ids: ['camp_de001'],
-      masterinbox_identifier: 'douglas-elliman',
       campaign_size: 2200,
       campaigns: [
         { id: 'camp_de001', name: 'NYC Broker Outreach', status: 'running', emails_sent_total: 1238, campaign_size: 2200, progress_pct: 56 },
@@ -39,7 +38,6 @@ export function generateSeed(): DashboardClient[] {
       weekly_target: 6,
       start_date: '2026-01-28',
       instantly_campaign_ids: ['camp_cp001a', 'camp_cp001b'],
-      masterinbox_identifier: 'compass',
       campaign_size: 1600,
       campaigns: [
         { id: 'camp_cp001a', name: 'Bay Area Sequence', status: 'running', emails_sent_total: 980, campaign_size: 1200, progress_pct: 82 },
@@ -54,7 +52,6 @@ export function generateSeed(): DashboardClient[] {
       weekly_target: 3,
       start_date: '2026-03-10',
       instantly_campaign_ids: ['camp_kw001'],
-      masterinbox_identifier: 'kw-partners',
       campaign_size: 900,
       campaigns: [
         { id: 'camp_kw001', name: 'Mid-Market Push', status: 'running', emails_sent_total: 798, campaign_size: 900, progress_pct: 89 },
@@ -68,7 +65,6 @@ export function generateSeed(): DashboardClient[] {
       weekly_target: 3,
       start_date: '2026-02-24',
       instantly_campaign_ids: ['camp_c21001'],
-      masterinbox_identifier: 'century-21',
       campaign_size: 1100,
       campaigns: [
         { id: 'camp_c21001', name: 'Spring Campaign', status: 'paused', emails_sent_total: 731, campaign_size: 1100, progress_pct: 66 },
@@ -82,7 +78,6 @@ export function generateSeed(): DashboardClient[] {
       weekly_target: 6,
       start_date: '2026-01-05',
       instantly_campaign_ids: ['camp_lf001a', 'camp_lf001b'],
-      masterinbox_identifier: 'long-foster',
       campaign_size: 1400,
       campaigns: [
         { id: 'camp_lf001a', name: 'DC Metro Sequence', status: 'running', emails_sent_total: 730, campaign_size: 1100, progress_pct: 66 },
@@ -97,7 +92,6 @@ export function generateSeed(): DashboardClient[] {
       weekly_target: 3,
       start_date: '2026-04-07',
       instantly_campaign_ids: ['camp_ev001'],
-      masterinbox_identifier: 'ev-chicago',
       campaign_size: 600,
       campaigns: [
         { id: 'camp_ev001', name: 'Chicago Launch', status: 'running', emails_sent_total: 380, campaign_size: 600, progress_pct: 63 },
@@ -111,7 +105,6 @@ export function generateSeed(): DashboardClient[] {
       weekly_target: 1,
       start_date: '2026-02-03',
       instantly_campaign_ids: ['camp_wr001'],
-      masterinbox_identifier: 'william-raveis',
       campaign_size: 450,
       campaigns: [
         { id: 'camp_wr001', name: 'New England Sequence', status: 'finished', emails_sent_total: 450, campaign_size: 450, progress_pct: 100 },
@@ -125,7 +118,6 @@ export function generateSeed(): DashboardClient[] {
       weekly_target: 1,
       start_date: '2026-04-21',
       instantly_campaign_ids: ['camp_rf001'],
-      masterinbox_identifier: 'redfin',
       campaign_size: 300,
       campaigns: [
         { id: 'camp_rf001', name: 'West Coast Outreach', status: 'running', emails_sent_total: 152, campaign_size: 300, progress_pct: 51 },

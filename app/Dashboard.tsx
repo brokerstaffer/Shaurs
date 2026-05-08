@@ -14,6 +14,7 @@ import {
   PLAN_DEFAULT_TARGET,
   PLAN_LABEL,
   type DashboardClient,
+  type InstantlyCampaign,
   type Plan,
 } from '@/lib/types';
 
@@ -21,6 +22,7 @@ type Filter = 'all' | 'risk' | 'ok';
 
 interface Props {
   initialClients: DashboardClient[];
+  allInstantlyCampaigns: InstantlyCampaign[];
   dataSource?: 'supabase' | 'seed';
 }
 
@@ -32,7 +34,7 @@ interface ModalState {
   startDate: string;
   weeklyTarget: number;
   selectedCampaignIds: string[];
-  masterinboxIdentifier: string;
+  campaignSearch: string;
 }
 
 const emptyModal: ModalState = {
@@ -43,10 +45,10 @@ const emptyModal: ModalState = {
   startDate: '',
   weeklyTarget: PLAN_DEFAULT_TARGET.production,
   selectedCampaignIds: [],
-  masterinboxIdentifier: '',
+  campaignSearch: '',
 };
 
-export default function Dashboard({ initialClients, dataSource }: Props) {
+export default function Dashboard({ initialClients, allInstantlyCampaigns, dataSource }: Props) {
   const [clients, setClients] = useState<DashboardClient[]>(initialClients);
   const [currentMonday, setCurrentMonday] = useState<Date>(() => getMondayOf(new Date()));
   const [filter, setFilter] = useState<Filter>('all');
@@ -139,7 +141,7 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
       startDate: c.start_date ?? '',
       weeklyTarget: c.weekly_target,
       selectedCampaignIds: [...c.instantly_campaign_ids],
-      masterinboxIdentifier: c.masterinbox_identifier ?? '',
+      campaignSearch: '',
     });
   }
 
@@ -156,7 +158,6 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
       weekly_target: modal.weeklyTarget,
       start_date: modal.startDate || null,
       instantly_campaign_ids: modal.selectedCampaignIds,
-      masterinbox_identifier: modal.masterinboxIdentifier || null,
     };
     try {
       if (modal.editingId) {
@@ -167,9 +168,7 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
         });
         if (!res.ok) throw new Error(await res.text());
         setClients((list) =>
-          list.map((c) =>
-            c.id === modal.editingId ? { ...c, ...payload, masterinbox_identifier: payload.masterinbox_identifier } : c
-          )
+          list.map((c) => (c.id === modal.editingId ? { ...c, ...payload } : c))
         );
         setToast('Client updated');
       } else {
@@ -225,16 +224,49 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
     }
   }
 
-  // Sort clients with all visible campaigns aggregated for the modal multi-select.
-  const allKnownCampaigns = useMemo(() => {
-    const seen = new Map<string, { id: string; name: string }>();
-    clients.forEach((c) =>
-      c.campaigns.forEach((camp) => {
-        if (!seen.has(camp.id)) seen.set(camp.id, { id: camp.id, name: camp.name });
-      })
-    );
-    return [...seen.values()];
-  }, [clients]);
+  // Full Instantly campaign list (all 93 from /campaigns), for the modal picker.
+  // Sorted alphabetically.
+  const allKnownCampaigns = useMemo(
+    () =>
+      [...allInstantlyCampaigns]
+        .map((c) => ({ id: c.id, name: c.name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [allInstantlyCampaigns]
+  );
+
+  // Whole-name match: same rule the seed script uses. A campaign matches if
+  // its (normalized) name contains the (normalized) client name as a substring.
+  function normalizeForMatch(s: string): string {
+    return s
+      .toLowerCase()
+      .replace(/[.,()]/g, '')
+      .replace(/&/g, 'and')
+      .replace(/[-_/]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  function autoMatchCampaigns(clientName: string): string[] {
+    const cnorm = normalizeForMatch(clientName);
+    if (!cnorm) return [];
+    return allKnownCampaigns.filter((c) => normalizeForMatch(c.name).includes(cnorm)).map((c) => c.id);
+  }
+
+  function setName(name: string) {
+    setModal((m) => {
+      // When the user types a name on a NEW client, auto-check campaigns whose
+      // name contains the exact client name (whole-name match). On edit, leave
+      // the existing selection alone — they may have manually curated it.
+      if (m.editingId) return { ...m, name };
+      return { ...m, name, selectedCampaignIds: autoMatchCampaigns(name) };
+    });
+  }
+
+  // Filter campaigns by the search text in the modal.
+  const filteredCampaigns = useMemo(() => {
+    const q = modal.campaignSearch.trim().toLowerCase();
+    if (!q) return allKnownCampaigns;
+    return allKnownCampaigns.filter((c) => c.name.toLowerCase().includes(q));
+  }, [allKnownCampaigns, modal.campaignSearch]);
 
   return (
     <>
@@ -370,7 +402,7 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
               type="text"
               value={modal.name}
               placeholder="e.g. Premier Metro Realty"
-              onChange={(e) => setModal((m) => ({ ...m, name: e.target.value }))}
+              onChange={(e) => setName(e.target.value)}
             />
           </div>
 
@@ -420,41 +452,55 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
           </div>
 
           <div className="form-group">
-            <label>Linked Instantly Campaigns</label>
+            <label>
+              Linked Instantly Campaigns
+              {modal.selectedCampaignIds.length > 0 && (
+                <span style={{ color: 'var(--text-muted)', fontWeight: 500, marginLeft: 6 }}>
+                  · {modal.selectedCampaignIds.length} selected
+                </span>
+              )}
+            </label>
             {allKnownCampaigns.length === 0 ? (
               <div className="form-help">No campaigns synced yet. Run a sync to populate this list.</div>
             ) : (
-              <div className="multi-list">
-                {allKnownCampaigns.map((camp) => (
-                  <label key={camp.id}>
-                    <input
-                      type="checkbox"
-                      checked={modal.selectedCampaignIds.includes(camp.id)}
-                      onChange={(e) =>
-                        setModal((m) => ({
-                          ...m,
-                          selectedCampaignIds: e.target.checked
-                            ? [...m.selectedCampaignIds, camp.id]
-                            : m.selectedCampaignIds.filter((x) => x !== camp.id),
-                        }))
-                      }
-                    />
-                    {camp.name}
-                  </label>
-                ))}
-              </div>
+              <>
+                <input
+                  type="text"
+                  value={modal.campaignSearch}
+                  placeholder={`Search ${allKnownCampaigns.length} campaigns…`}
+                  onChange={(e) => setModal((m) => ({ ...m, campaignSearch: e.target.value }))}
+                  style={{ marginBottom: 8 }}
+                />
+                <div className="multi-list">
+                  {filteredCampaigns.length === 0 ? (
+                    <div className="form-help" style={{ padding: '6px 6px' }}>No campaigns match "{modal.campaignSearch}".</div>
+                  ) : (
+                    filteredCampaigns.map((camp) => (
+                      <label key={camp.id}>
+                        <input
+                          type="checkbox"
+                          checked={modal.selectedCampaignIds.includes(camp.id)}
+                          onChange={(e) =>
+                            setModal((m) => ({
+                              ...m,
+                              selectedCampaignIds: e.target.checked
+                                ? [...m.selectedCampaignIds, camp.id]
+                                : m.selectedCampaignIds.filter((x) => x !== camp.id),
+                            }))
+                          }
+                        />
+                        {camp.name}
+                      </label>
+                    ))
+                  )}
+                </div>
+                <div className="form-help">
+                  {modal.editingId
+                    ? 'Edit selections manually.'
+                    : 'Auto-checks any campaign whose name contains your client name. Refine if needed.'}
+                </div>
+              </>
             )}
-          </div>
-
-          <div className="form-group">
-            <label>MasterInbox Identifier</label>
-            <input
-              type="text"
-              value={modal.masterinboxIdentifier}
-              placeholder="campaign id, list, or tag — TBD after API discovery"
-              onChange={(e) => setModal((m) => ({ ...m, masterinboxIdentifier: e.target.value }))}
-            />
-            <div className="form-help">How this client is identified in MasterInbox. Field name will be locked once we confirm the API.</div>
           </div>
 
           <div className="modal-actions">
