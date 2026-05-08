@@ -52,6 +52,7 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   const [sortByLeft, setSortByLeft] = useState(false);
   const [campaignSelections, setCampaignSelections] = useState<Record<string, string>>({});
+  const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(emptyModal);
   const [refreshing, setRefreshing] = useState(false);
@@ -346,6 +347,15 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
                       onCampaignChange={(camp) =>
                         setCampaignSelections((prev) => ({ ...prev, [c.id]: camp }))
                       }
+                      isExpanded={expandedClients.has(c.id)}
+                      onToggleExpanded={() =>
+                        setExpandedClients((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(c.id)) next.delete(c.id);
+                          else next.add(c.id);
+                          return next;
+                        })
+                      }
                       onEdit={() => openEditModal(c)}
                       onDelete={() => deleteClient(c.id)}
                     />
@@ -498,12 +508,16 @@ function ClientRow({
   client,
   campaignSelection,
   onCampaignChange,
+  isExpanded,
+  onToggleExpanded,
   onEdit,
   onDelete,
 }: {
   client: DashboardClient;
   campaignSelection: string;
   onCampaignChange: (id: string) => void;
+  isExpanded: boolean;
+  onToggleExpanded: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -619,19 +633,10 @@ function ClientRow({
     lastIntroCell = <span className="last-intro li-stale">{d.daysSince}d ago</span>;
   }
 
-  // campaigns under client name
   const camps = client.campaigns;
-  const campsHTML = camps.length > 0 && (
-    <div className="client-camps">
-      <span className="camps-count">{camps.length === 1 ? '1 campaign' : `${camps.length} campaigns`}</span>
-      {camps.map((c) => (
-        <div key={c.id} className={`camp-row is-${c.status}`}>
-          <span className="camp-dot" />
-          {c.name}
-        </div>
-      ))}
-    </div>
-  );
+  const campsCount = camps.length;
+  const runningCount = camps.filter((c) => c.status === 'running').length;
+  const campsLabel = campsCount === 0 ? 'No campaigns' : campsCount === 1 ? '1 campaign' : `${campsCount} campaigns`;
 
   const since = client.start_date
     ? new Date(client.start_date).toLocaleDateString('en-US', {
@@ -643,10 +648,41 @@ function ClientRow({
 
   return (
     <tr>
-      <td>
-        <div className="client-name">{client.name}</div>
+      <td className="client-cell">
+        <button
+          className="client-header"
+          onClick={campsCount > 0 ? onToggleExpanded : undefined}
+          disabled={campsCount === 0}
+          aria-expanded={isExpanded}
+          aria-label={`${client.name}, ${campsLabel}${campsCount > 0 ? ', click to ' + (isExpanded ? 'collapse' : 'expand') : ''}`}
+        >
+          <div className="client-name">{client.name}</div>
+        </button>
         {since && <div className="client-since">Since {since}</div>}
-        {campsHTML}
+        <div
+          className={
+            'client-meta' +
+            (isExpanded ? ' is-open' : '') +
+            (campsCount === 0 ? ' is-empty' : '') +
+            (runningCount === 0 ? ' no-running' : '')
+          }
+          onClick={campsCount > 0 ? onToggleExpanded : undefined}
+          role={campsCount > 0 ? 'button' : undefined}
+        >
+          {campsCount > 0 && <span className="client-meta-dot" />}
+          <span>{campsLabel}{runningCount > 0 ? ` · ${runningCount} running` : ''}</span>
+          {campsCount > 0 && <span className="client-meta-chevron">▾</span>}
+        </div>
+        {isExpanded && campsCount > 0 && (
+          <div className="client-camps">
+            {camps.map((c) => (
+              <div key={c.id} className={`camp-row is-${c.status}`}>
+                <span className="camp-dot" />
+                <span className="camp-name">{c.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </td>
       <td>{emailsCell}</td>
       <td>{introsCell}</td>
