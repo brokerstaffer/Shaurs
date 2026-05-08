@@ -63,14 +63,31 @@ npm run dev
 
 ## Deploy on Railway
 
-1. New project → Deploy from GitHub repo `brokerstaffer/Shaurs`.
-2. Set the env vars from `.env.local`.
-3. (Optional) Add a second service in the same project for scheduled sync:
-   - Source: same repo
-   - Start command: `npx tsx scripts/sync.ts`
-   - Add a Cron schedule: `*/15 * * * *` (every 15 minutes)
+The project is already deployed at **https://web-production-d18b09.up.railway.app** (Railway project `brilliant-victory`, ID `fb1fcda3-0fcf-4df4-8e93-15cbed90ed31`). Two services:
 
-The web service uses [`railway.json`](railway.json) for build/start config. The cron service overrides the start command via the Railway UI.
+| Service | Purpose | Start command |
+|---|---|---|
+| `web` | Next.js dashboard | `npm start` (from [railway.json](railway.json)) |
+| `sync-worker` | Cron sync of Instantly + MasterInbox → Supabase | `npx tsx scripts/sync.ts` (set via `NIXPACKS_START_CMD`) |
+
+### Re-deploying
+
+```bash
+# Set the project token once
+export RAILWAY_TOKEN=<project-token>
+
+# Push to a service from the project root
+railway up --service web --ci
+railway up --service sync-worker --detach
+```
+
+### Configuring the cron schedule (one-time)
+
+Railway's CLI can't set the per-service cron schedule directly. Open the Railway dashboard, go to the **sync-worker** service → **Settings** → **Cron Schedule** → set `*/15 * * * *`. Once set, every 15 minutes Railway will spin up a one-shot deploy that runs `npx tsx scripts/sync.ts` and exits.
+
+Until that's configured, `sync-worker` is idle. **Manual sync still works in two ways:**
+1. The dashboard's "↻" refresh button (calls `/api/sync/run` on the web service).
+2. `curl -X POST https://web-production-d18b09.up.railway.app/api/sync/run`.
 
 ## What's outstanding
 
