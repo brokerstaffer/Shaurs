@@ -32,8 +32,12 @@ export interface WeeklyMetric {
 
 export interface DashboardClient extends Client {
   campaigns: InstantlyCampaign[];
-  metrics: WeeklyMetric;
+  // All weekly metrics this client has, keyed by ISO Monday (YYYY-MM-DD).
+  // Lookup for the current visible week is O(1) — no DB hit on week change.
+  metricsByWeek: Record<string, WeeklyMetric>;
 }
+
+export const HISTORICAL_WEEKS = 26;
 
 export const PLAN_LABEL: Record<Plan, string> = {
   minimum: 'Minimum',

@@ -1,13 +1,6 @@
 // Sync worker: pulls fresh data from Instantly + MasterInbox, upserts into Supabase.
-//
-// Usage:
-//   - Triggered manually by `POST /api/sync/run` (also imported by route).
-//   - Run on a Railway cron service: `tsx scripts/sync.ts` every 15 min.
-//
-// Environment required:
-//   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
-//   INSTANTLY_API_KEY,
-//   MASTERINBOX_API_KEY  (optional until docs land — sync skips MasterInbox if missing)
+// Backfills the last N weeks of weekly_metrics so the dashboard can navigate
+// historical weeks without hitting the third-party APIs again.
 
 import { getSupabase } from '../lib/supabase';
 import {
@@ -18,11 +11,12 @@ import {
   mapStatus,
   progressPct,
 } from '../lib/instantly';
-import { addDays, weekKey } from '../lib/derive';
-import { findLabelId, listAllProspects, filterIntros } from '../lib/masterinbox';
+import { addDays, getMondayOf, weekKey } from '../lib/derive';
+import { findLabelId, listAllProspects } from '../lib/masterinbox';
+import { HISTORICAL_WEEKS } from '../lib/types';
 
 interface SyncResult {
-  instantly: { ok: boolean; error?: string; campaigns?: number };
+  instantly: { ok: boolean; error?: string; campaigns?: number; weeksBackfilled?: number };
   masterinbox: { ok: boolean; error?: string; intros?: number; skipped?: boolean };
 }
 
@@ -31,11 +25,24 @@ export async function runSync(): Promise<SyncResult> {
     instantly: { ok: false },
     masterinbox: { ok: false },
   };
-
   result.instantly = await runInstantly();
   result.masterinbox = await runMasterInbox();
-
   return result;
+}
+
+// All ISO Mondays for the visible window, oldest → newest.
+function backfillWindow(): { mondayKeys: string[]; rangeStart: string; rangeEnd: string } {
+  const today = new Date();
+  const thisMonday = getMondayOf(today);
+  const earliest = addDays(thisMonday, -7 * (HISTORICAL_WEEKS - 1));
+  const mondayKeys: string[] = [];
+  for (let i = 0; i < HISTORICAL_WEEKS; i++) {
+    mondayKeys.push(weekKey(addDays(earliest, 7 * i)));
+  }
+  const rangeStart = weekKey(earliest);
+  // End of current week: next Monday minus 1 day = Sunday.
+  const rangeEnd = addDays(thisMonday, 6).toISOString().split('T')[0];
+  return { mondayKeys, rangeStart, rangeEnd };
 }
 
 async function runInstantly(): Promise<SyncResult['instantly']> {
@@ -48,10 +55,9 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
 
   try {
     const [campaigns, analytics] = await Promise.all([listCampaigns(), listAnalytics()]);
-
     const analyticsById = new Map(analytics.map((a) => [a.campaign_id, a]));
 
-    const rows = campaigns.map((c) => {
+    const campaignRows = campaigns.map((c) => {
       const a = analyticsById.get(c.id);
       return {
         id: c.id,
@@ -62,47 +68,70 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
         progress_pct: a ? Number(progressPct(a).toFixed(2)) : 0,
       };
     });
-
-    if (rows.length > 0) {
-      const { error } = await sb.from('instantly_campaigns').upsert(rows);
+    if (campaignRows.length > 0) {
+      const { error } = await sb.from('instantly_campaigns').upsert(campaignRows);
       if (error) throw new Error(error.message);
     }
 
-    // Per-week emails per client: sum daily-analytics across each client's
-    // linked campaign IDs for the current ISO week.
-    const monday = weekKey(new Date());
-    const sunday = addDays(monday, 6).toISOString().split('T')[0];
+    // Pull each linked campaign's daily-analytics across the entire backfill
+    // window once, then bucket per ISO Monday locally. One API call per campaign.
+    const { mondayKeys, rangeStart, rangeEnd } = backfillWindow();
 
     const { data: clients } = await sb
       .from('clients')
       .select('id, instantly_campaign_ids');
+    if (!clients) {
+      await sb.from('sync_runs').update({ ok: true, finished_at: new Date().toISOString() }).eq('id', run?.id);
+      return { ok: true, campaigns: campaignRows.length, weeksBackfilled: 0 };
+    }
 
-    if (clients && clients.length > 0) {
-      // Walk each client and call daily-analytics per campaign.
-      // Volume here is N_clients * avg_campaigns_per_client which is fine for ~24 clients.
-      for (const c of clients as { id: string; instantly_campaign_ids: string[] }[]) {
-        let total = 0;
-        for (const cid of c.instantly_campaign_ids ?? []) {
-          try {
-            const days = await dailyAnalytics(cid, monday, sunday);
-            total += days.reduce((acc, d) => acc + (d.sent ?? 0), 0);
-          } catch (err) {
-            // One bad campaign id shouldn't tank the whole sync — log and continue.
-            console.warn(`daily-analytics failed for ${cid}:`, (err as Error).message);
-          }
+    // Collect all unique campaign ids referenced by clients.
+    const linkedIds = new Set<string>();
+    for (const c of clients as { instantly_campaign_ids: string[] }[]) {
+      (c.instantly_campaign_ids ?? []).forEach((id) => linkedIds.add(id));
+    }
+
+    // campaignId -> weekKey -> sent
+    const campaignWeekly = new Map<string, Map<string, number>>();
+    for (const cid of linkedIds) {
+      try {
+        const days = await dailyAnalytics(cid, rangeStart, rangeEnd);
+        const buckets = new Map<string, number>();
+        for (const d of days) {
+          if (!d.date) continue;
+          const wk = weekKey(d.date);
+          buckets.set(wk, (buckets.get(wk) ?? 0) + (d.sent ?? 0));
         }
-        await sb.from('weekly_metrics').upsert(
-          { client_id: c.id, week_key: monday, emails_sent: total },
-          { onConflict: 'client_id,week_key', ignoreDuplicates: false }
-        );
+        campaignWeekly.set(cid, buckets);
+      } catch (err) {
+        console.warn(`daily-analytics failed for ${cid}:`, (err as Error).message);
+        campaignWeekly.set(cid, new Map());
       }
     }
 
-    await sb
-      .from('sync_runs')
-      .update({ ok: true, finished_at: new Date().toISOString() })
-      .eq('id', run?.id);
-    return { ok: true, campaigns: rows.length };
+    // For each client × each week, sum across linked campaigns and upsert.
+    const upserts: { client_id: string; week_key: string; emails_sent: number }[] = [];
+    for (const c of clients as { id: string; instantly_campaign_ids: string[] }[]) {
+      for (const wk of mondayKeys) {
+        let total = 0;
+        for (const cid of c.instantly_campaign_ids ?? []) {
+          total += campaignWeekly.get(cid)?.get(wk) ?? 0;
+        }
+        upserts.push({ client_id: c.id, week_key: wk, emails_sent: total });
+      }
+    }
+
+    // Upsert in batches; preserve intros + last_intro_at by passing only emails_sent
+    // and relying on the unique constraint to merge.
+    if (upserts.length > 0) {
+      const { error } = await sb
+        .from('weekly_metrics')
+        .upsert(upserts, { onConflict: 'client_id,week_key', ignoreDuplicates: false });
+      if (error) throw new Error(error.message);
+    }
+
+    await sb.from('sync_runs').update({ ok: true, finished_at: new Date().toISOString() }).eq('id', run?.id);
+    return { ok: true, campaigns: campaignRows.length, weeksBackfilled: mondayKeys.length };
   } catch (err) {
     const message = (err as Error).message;
     await sb
@@ -114,9 +143,7 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
 }
 
 async function runMasterInbox(): Promise<SyncResult['masterinbox']> {
-  if (!process.env.MASTERINBOX_API_KEY) {
-    return { ok: true, skipped: true };
-  }
+  if (!process.env.MASTERINBOX_API_KEY) return { ok: true, skipped: true };
 
   const sb = getSupabase();
   const { data: run } = await sb
@@ -126,83 +153,81 @@ async function runMasterInbox(): Promise<SyncResult['masterinbox']> {
     .single();
 
   try {
-    // 1. Find the "Introduction" label id
     const introLabelId = await findLabelId('Introduction');
     if (introLabelId === null) {
       throw new Error('"Introduction" label not found in MasterInbox workspace');
     }
 
-    // 2. Pull all prospects (server-side filters are silently ignored)
     const prospects = await listAllProspects(100);
+    const intros = prospects.filter((p) => p.labels?.includes(introLabelId) && p.campaign_id);
 
-    // 3. Filter to prospects labeled Introduction within current ISO week,
-    //    using updated_at as the best available "labeled at" proxy.
-    const monday = weekKey(new Date());
-    const sundayDate = addDays(monday, 7); // exclusive end (next Monday 00:00)
-    const startMs = new Date(monday + 'T00:00:00').getTime();
-    const endMs = sundayDate.getTime();
+    const { mondayKeys } = backfillWindow();
+    const validWeekSet = new Set(mondayKeys);
 
-    const intros = filterIntros(prospects, introLabelId, startMs, endMs);
+    // (campaign_id, weekKey) -> { count, latest_ms }
+    const byCampaignWeek = new Map<string, { count: number; latest: number }>();
+    // campaign_id -> latest_ms (any time, for "Last Intro" fallback)
+    const allTimeLatest = new Map<string, number>();
 
-    // 4. Roll up by Instantly campaign_id, since clients link to Instantly campaigns.
-    const byCampaign = new Map<string, { count: number; latest: number | null }>();
     for (const p of intros) {
-      if (!p.campaign_id) continue;
-      const cur = byCampaign.get(p.campaign_id) ?? { count: 0, latest: null };
+      const t = p.updated_at;
+      const wk = weekKey(new Date(t));
+
+      const allKey = p.campaign_id!;
+      if ((allTimeLatest.get(allKey) ?? 0) < t) allTimeLatest.set(allKey, t);
+
+      if (!validWeekSet.has(wk)) continue;
+      const key = `${p.campaign_id}|${wk}`;
+      const cur = byCampaignWeek.get(key) ?? { count: 0, latest: 0 };
       cur.count++;
-      if (!cur.latest || p.updated_at > cur.latest) cur.latest = p.updated_at;
-      byCampaign.set(p.campaign_id, cur);
+      if (t > cur.latest) cur.latest = t;
+      byCampaignWeek.set(key, cur);
     }
 
-    // For "Last Intro" we also want the most recent intro EVER, regardless of
-    // week. Compute per-campaign max(updated_at) over all-time intros too.
-    const allIntros = prospects.filter((p) => p.labels?.includes(introLabelId));
-    const allTimeLatestByCampaign = new Map<string, number>();
-    for (const p of allIntros) {
-      if (!p.campaign_id) continue;
-      const cur = allTimeLatestByCampaign.get(p.campaign_id) ?? 0;
-      if (p.updated_at > cur) allTimeLatestByCampaign.set(p.campaign_id, p.updated_at);
-    }
-
-    // 5. Upsert per-client weekly metrics by summing across each client's
-    //    linked Instantly campaigns.
     const { data: clients } = await sb
       .from('clients')
       .select('id, instantly_campaign_ids');
     if (clients) {
+      const upserts: {
+        client_id: string;
+        week_key: string;
+        intros: number;
+        last_intro_at: string | null;
+      }[] = [];
       for (const c of clients as { id: string; instantly_campaign_ids: string[] }[]) {
-        let count = 0;
-        let latestThisWeek: number | null = null;
-        let latestAllTime: number | null = null;
-        for (const cid of c.instantly_campaign_ids ?? []) {
-          const week = byCampaign.get(cid);
-          if (week) {
-            count += week.count;
-            if (week.latest && (!latestThisWeek || week.latest > latestThisWeek)) latestThisWeek = week.latest;
+        const linkedAllTimeLatest = (c.instantly_campaign_ids ?? [])
+          .map((cid) => allTimeLatest.get(cid) ?? 0)
+          .reduce((a, b) => Math.max(a, b), 0);
+
+        for (const wk of mondayKeys) {
+          let count = 0;
+          let latest = 0;
+          for (const cid of c.instantly_campaign_ids ?? []) {
+            const stats = byCampaignWeek.get(`${cid}|${wk}`);
+            if (stats) {
+              count += stats.count;
+              if (stats.latest > latest) latest = stats.latest;
+            }
           }
-          const all = allTimeLatestByCampaign.get(cid);
-          if (all && (!latestAllTime || all > latestAllTime)) latestAllTime = all;
-        }
-        const lastIntroIso =
-          (latestThisWeek ?? latestAllTime)
-            ? new Date((latestThisWeek ?? latestAllTime) as number).toISOString()
-            : null;
-        await sb.from('weekly_metrics').upsert(
-          {
+          // Last Intro: prefer this week's latest, else fall back to all-time
+          const ts = latest > 0 ? latest : linkedAllTimeLatest;
+          upserts.push({
             client_id: c.id,
-            week_key: monday,
+            week_key: wk,
             intros: count,
-            last_intro_at: lastIntroIso,
-          },
-          { onConflict: 'client_id,week_key', ignoreDuplicates: false }
-        );
+            last_intro_at: ts > 0 ? new Date(ts).toISOString() : null,
+          });
+        }
+      }
+      if (upserts.length > 0) {
+        const { error } = await sb
+          .from('weekly_metrics')
+          .upsert(upserts, { onConflict: 'client_id,week_key', ignoreDuplicates: false });
+        if (error) throw new Error(error.message);
       }
     }
 
-    await sb
-      .from('sync_runs')
-      .update({ ok: true, finished_at: new Date().toISOString() })
-      .eq('id', run?.id);
+    await sb.from('sync_runs').update({ ok: true, finished_at: new Date().toISOString() }).eq('id', run?.id);
     return { ok: true, intros: intros.length };
   } catch (err) {
     const message = (err as Error).message;

@@ -1,11 +1,38 @@
-import type { DashboardClient } from './types';
+import type { DashboardClient, WeeklyMetric } from './types';
+
+const EMPTY_METRIC: Omit<WeeklyMetric, 'client_id' | 'week_key'> = {
+  emails_sent: 0,
+  intros: 0,
+  last_intro_at: null,
+};
+
+export function metricFor(c: DashboardClient, weekKey: string): WeeklyMetric {
+  return c.metricsByWeek[weekKey] ?? {
+    client_id: c.id,
+    week_key: weekKey,
+    ...EMPTY_METRIC,
+  };
+}
+
+// All calendar math is done in UTC. Mixing local-tz `setDate` with date arithmetic
+// crosses DST boundaries silently — 175 days of local-time addition can drift the
+// UTC calendar date by ±1, which produced rogue "Sunday" week keys in Supabase.
+
+function asUTC(d: Date | string): Date {
+  if (typeof d === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return new Date(d + 'T00:00:00Z');
+    return new Date(d);
+  }
+  return d;
+}
 
 export function getMondayOf(d: Date | string): Date {
-  const date = new Date(d);
-  const day = date.getDay();
-  date.setDate(date.getDate() - day + (day === 0 ? -6 : 1));
-  date.setHours(0, 0, 0, 0);
-  return date;
+  const date = asUTC(d);
+  const day = date.getUTCDay();
+  const result = new Date(date);
+  result.setUTCDate(date.getUTCDate() - day + (day === 0 ? -6 : 1));
+  result.setUTCHours(0, 0, 0, 0);
+  return result;
 }
 
 export function weekKey(d: Date | string): string {
@@ -13,13 +40,14 @@ export function weekKey(d: Date | string): string {
 }
 
 export function addDays(d: Date | string, n: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
+  const date = asUTC(d);
+  const result = new Date(date);
+  result.setUTCDate(date.getUTCDate() + n);
+  return result;
 }
 
 export function fmtDate(d: Date | string): string {
-  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return asUTC(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
 export function formatWeek(monday: Date): string {
@@ -53,8 +81,8 @@ export interface DerivedRow {
   campaignsAvgPct: number;
 }
 
-export function derive(c: DashboardClient): DerivedRow {
-  const m = c.metrics;
+export function derive(c: DashboardClient, weekKey: string): DerivedRow {
+  const m = metricFor(c, weekKey);
   const hasEmails = m.emails_sent > 0;
   const hasIntros = m.intros > 0 || m.last_intro_at !== null;
   // For status thresholds we treat the metric as known if any sync has happened.

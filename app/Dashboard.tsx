@@ -73,17 +73,17 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
 
   const visible = useMemo(() => {
     let list = clients.filter((c) => {
-      const d = derive(c);
+      const d = derive(c, key);
       if (filter === 'all') return true;
       if (filter === 'risk') return d.status === 'risk';
       if (filter === 'ok') return d.status === 'ok';
       return true;
     });
     if (sortByLeft) {
-      list = [...list].sort((a, b) => derive(b).leftThisWeek - derive(a).leftThisWeek);
+      list = [...list].sort((a, b) => derive(b, key).leftThisWeek - derive(a, key).leftThisWeek);
     }
     return list;
-  }, [clients, filter, sortByLeft]);
+  }, [clients, filter, sortByLeft, key]);
 
   const summary = useMemo(() => {
     let total = 0;
@@ -95,7 +95,7 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
     let convDen = 0;
     clients.forEach((c) => {
       total++;
-      const d = derive(c);
+      const d = derive(c, key);
       if (d.status === 'risk') risk++;
       if (d.status === 'ok') ok++;
       intros += d.intros;
@@ -113,7 +113,7 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
       emails,
       conv: convDen > 0 ? ((convNum / convDen) * 100).toFixed(1) + '%' : '—',
     };
-  }, [clients]);
+  }, [clients, key]);
 
   function changeWeek(dir: -1 | 1) {
     setCurrentMonday((d) => addDays(d, dir * 7));
@@ -187,13 +187,7 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
             id: client.id,
             campaign_size: 0,
             campaigns: [],
-            metrics: {
-              client_id: client.id,
-              week_key: key,
-              emails_sent: 0,
-              intros: 0,
-              last_intro_at: null,
-            },
+            metricsByWeek: {},
           },
         ]);
         setToast('Client added');
@@ -343,6 +337,7 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
                     <ClientRow
                       key={c.id}
                       client={c}
+                      weekKey={key}
                       campaignSelection={campaignSelections[c.id] ?? '__avg__'}
                       onCampaignChange={(camp) =>
                         setCampaignSelections((prev) => ({ ...prev, [c.id]: camp }))
@@ -502,21 +497,14 @@ function CampaignsPopup({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const camps = client.campaigns;
-  const running = camps.filter((c) => c.status === 'running').length;
-  const paused = camps.filter((c) => c.status === 'paused').length;
-  const finished = camps.filter((c) => c.status === 'finished').length;
-  const summaryParts: string[] = [];
-  if (running) summaryParts.push(`${running} running`);
-  if (paused) summaryParts.push(`${paused} paused`);
-  if (finished) summaryParts.push(`${finished} finished`);
-  const summary = summaryParts.join(' · ') || `${camps.length} total`;
-
-  // Sort: running first, then paused, then finished
-  const order: Record<string, number> = { running: 0, paused: 1, finished: 2 };
-  const sorted = [...camps].sort(
-    (a, b) => (order[a.status ?? 'finished'] ?? 9) - (order[b.status ?? 'finished'] ?? 9)
-  );
+  // Only active campaigns are surfaced in the dashboard.
+  const camps = client.campaigns.filter((c) => c.status === 'running');
+  const totalSize = camps.reduce((a, b) => a + b.campaign_size, 0);
+  const totalSent = camps.reduce((a, b) => a + b.emails_sent_total, 0);
+  const summary =
+    camps.length === 0
+      ? 'No active campaigns'
+      : `${totalSent.toLocaleString()} / ${totalSize.toLocaleString()} sent`;
 
   return (
     <div
@@ -529,37 +517,45 @@ function CampaignsPopup({
         <div className="camps-popup-header">
           <div className="camps-popup-title">{client.name}</div>
           <div className="camps-popup-sub">
-            {camps.length} {camps.length === 1 ? 'campaign' : 'campaigns'} · {summary}
+            {camps.length} active {camps.length === 1 ? 'campaign' : 'campaigns'}
+            {camps.length > 0 ? ` · ${summary}` : ''}
           </div>
         </div>
         <div className="camps-popup-body">
-          {sorted.map((c) => {
-            const status = c.status ?? 'finished';
-            const pct = Math.min(100, Math.max(0, Number(c.progress_pct ?? 0)));
-            const sent = c.emails_sent_total?.toLocaleString() ?? '0';
-            const size = c.campaign_size?.toLocaleString() ?? '0';
-            return (
-              <div key={c.id} className={`camps-popup-row is-${status}`}>
-                <span className="camp-status-pill">
-                  <span className="camp-pill-dot" />
-                  {status === 'running' ? 'Running' : status === 'paused' ? 'Paused' : 'Finished'}
-                </span>
-                <div className="camp-info">
-                  <div className="camp-info-name">{c.name}</div>
-                  <div className="camp-info-meta">
-                    <span>{sent} / {size}</span>
-                    <span>·</span>
-                    <span>{Math.round(pct)}%</span>
-                  </div>
-                  {c.campaign_size > 0 && (
-                    <div className="camp-mini-bar">
-                      <span style={{ width: `${pct}%` }} />
+          {camps.length === 0 ? (
+            <div className="empty-state" style={{ padding: '40px 20px' }}>
+              <div className="empty-icon">⏸</div>
+              <h3>No active campaigns</h3>
+              <p>This client has no running campaigns right now.</p>
+            </div>
+          ) : (
+            camps.map((c) => {
+              const pct = Math.min(100, Math.max(0, Number(c.progress_pct ?? 0)));
+              const sent = c.emails_sent_total?.toLocaleString() ?? '0';
+              const size = c.campaign_size?.toLocaleString() ?? '0';
+              return (
+                <div key={c.id} className="camps-popup-row is-running">
+                  <span className="camp-status-pill">
+                    <span className="camp-pill-dot" />
+                    Running
+                  </span>
+                  <div className="camp-info">
+                    <div className="camp-info-name">{c.name}</div>
+                    <div className="camp-info-meta">
+                      <span>{sent} / {size}</span>
+                      <span>·</span>
+                      <span>{Math.round(pct)}%</span>
                     </div>
-                  )}
+                    {c.campaign_size > 0 && (
+                      <div className="camp-mini-bar">
+                        <span style={{ width: `${pct}%` }} />
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
         <div className="camps-popup-footer">
           <button className="btn-secondary" onClick={onClose} style={{ flex: 'none', padding: '8px 18px' }}>
@@ -593,6 +589,7 @@ function SummaryCard({
 
 function ClientRow({
   client,
+  weekKey: wk,
   campaignSelection,
   onCampaignChange,
   onShowCampaigns,
@@ -600,13 +597,18 @@ function ClientRow({
   onDelete,
 }: {
   client: DashboardClient;
+  weekKey: string;
   campaignSelection: string;
   onCampaignChange: (id: string) => void;
   onShowCampaigns: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const d = derive(client);
+  const d = derive(client, wk);
+  // Per spec, the dashboard only reflects ACTIVE (running) campaigns:
+  // count, dropdown options, and the "all campaigns (avg)" rollup all
+  // exclude paused/finished campaigns.
+  const activeCampaigns = client.campaigns.filter((c) => c.status === 'running');
 
   // emails cell
   const emailsCell = d.emails > 0 ? (
@@ -654,37 +656,41 @@ function ClientRow({
       <span className="status-badge s-ok"><span className="status-dot" />On Track</span>
     );
 
-  // campaign cell — dropdown selector + bar
+  // campaign cell — dropdown selector + bar (active campaigns only)
   let campaignCell: React.ReactNode;
-  if (client.campaigns.length === 0) {
+  if (activeCampaigns.length === 0) {
     campaignCell = <span className="api-none">—</span>;
   } else {
     const selected =
       campaignSelection === '__avg__'
         ? null
-        : client.campaigns.find((c) => c.id === campaignSelection) ?? null;
+        : activeCampaigns.find((c) => c.id === campaignSelection) ?? null;
 
-    const sent = selected ? selected.emails_sent_total : client.campaigns.reduce((a, b) => a + b.emails_sent_total, 0);
-    const size = selected ? selected.campaign_size : client.campaigns.reduce((a, b) => a + b.campaign_size, 0);
-    const pct = selected ? selected.progress_pct : Math.round(d.campaignsAvgPct);
-    const finished = selected ? selected.status === 'finished' : client.campaigns.every((c) => c.status === 'finished');
-    const paused = selected ? selected.status === 'paused' : !finished && client.campaigns.every((c) => c.status === 'paused');
-    const pbClass = finished ? 'pf-complete' : paused ? 'pf-stalled' : 'pf-active';
-    const tagClass = finished ? 'ct-complete' : paused ? 'ct-stalled' : 'ct-active';
-    const tagLabel = finished ? 'Finished' : paused ? 'Paused' : 'Running';
+    const activeAvgPct =
+      activeCampaigns.reduce((a, b) => a + (b.progress_pct || 0), 0) / activeCampaigns.length;
+
+    const sent = selected
+      ? selected.emails_sent_total
+      : activeCampaigns.reduce((a, b) => a + b.emails_sent_total, 0);
+    const size = selected
+      ? selected.campaign_size
+      : activeCampaigns.reduce((a, b) => a + b.campaign_size, 0);
+    const pct = selected ? selected.progress_pct : Math.round(activeAvgPct);
 
     campaignCell = (
       <div className="monthly-cell">
-        <select
-          className="campaign-select"
-          value={campaignSelection}
-          onChange={(e) => onCampaignChange(e.target.value)}
-        >
-          <option value="__avg__">All campaigns (avg)</option>
-          {client.campaigns.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
+        {activeCampaigns.length > 1 && (
+          <select
+            className="campaign-select"
+            value={campaignSelection}
+            onChange={(e) => onCampaignChange(e.target.value)}
+          >
+            <option value="__avg__">All active (avg)</option>
+            {activeCampaigns.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        )}
         <div className="monthly-label">
           <span className="monthly-count">
             {sent.toLocaleString()} / {size.toLocaleString()}
@@ -692,11 +698,11 @@ function ClientRow({
           <span className="monthly-pct">{Math.round(pct)}%</span>
         </div>
         <div className="progress-track">
-          <div className={`progress-fill ${pbClass}`} style={{ width: `${Math.min(100, pct)}%` }} />
+          <div className="progress-fill pf-active" style={{ width: `${Math.min(100, pct)}%` }} />
         </div>
-        <div className={`campaign-tag ${tagClass}`}>
+        <div className="campaign-tag ct-active">
           <span className="ct-dot" />
-          {tagLabel}
+          Running
         </div>
       </div>
     );
@@ -718,10 +724,12 @@ function ClientRow({
     lastIntroCell = <span className="last-intro li-stale">{d.daysSince}d ago</span>;
   }
 
-  const camps = client.campaigns;
-  const campsCount = camps.length;
-  const runningCount = camps.filter((c) => c.status === 'running').length;
-  const campsLabel = campsCount === 0 ? 'No campaigns' : campsCount === 1 ? '1 campaign' : `${campsCount} campaigns`;
+  // Per spec, the dashboard only counts ACTIVE campaigns under each client.
+  const campsCount = activeCampaigns.length;
+  const campsLabel =
+    campsCount === 0 ? 'No active campaigns'
+      : campsCount === 1 ? '1 active campaign'
+      : `${campsCount} active campaigns`;
 
   const since = client.start_date
     ? new Date(client.start_date).toLocaleDateString('en-US', {
@@ -737,21 +745,17 @@ function ClientRow({
         <div className="client-name">{client.name}</div>
         {since && <div className="client-since">Since {since}</div>}
         <div
-          className={
-            'client-meta' +
-            (campsCount === 0 ? ' is-empty' : '') +
-            (runningCount === 0 ? ' no-running' : '')
-          }
+          className={'client-meta' + (campsCount === 0 ? ' is-empty' : '')}
           onClick={campsCount > 0 ? onShowCampaigns : undefined}
           role={campsCount > 0 ? 'button' : undefined}
           aria-label={
             campsCount > 0
-              ? `View ${campsCount} campaign${campsCount === 1 ? '' : 's'}`
-              : 'No campaigns linked'
+              ? `View ${campsCount} active campaign${campsCount === 1 ? '' : 's'}`
+              : 'No active campaigns'
           }
         >
           {campsCount > 0 && <span className="client-meta-dot" />}
-          <span>{campsLabel}{runningCount > 0 ? ` · ${runningCount} running` : ''}</span>
+          <span>{campsLabel}</span>
           {campsCount > 0 && <span className="client-meta-arrow">›</span>}
         </div>
       </td>

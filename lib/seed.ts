@@ -30,7 +30,7 @@ export function generateSeed(): DashboardClient[] {
       campaigns: [
         { id: 'camp_de001', name: 'NYC Broker Outreach', status: 'running', emails_sent_total: 1238, campaign_size: 2200, progress_pct: 56 },
       ],
-      metrics: m('de001', W0, 212, 8, addDays(now, -1).toISOString()),
+      metricsByWeek: { [W0]: m('de001', W0, 212, 8, addDays(now, -1).toISOString()) },
     },
     {
       id: 'cp001',
@@ -45,7 +45,7 @@ export function generateSeed(): DashboardClient[] {
         { id: 'camp_cp001a', name: 'Bay Area Sequence', status: 'running', emails_sent_total: 980, campaign_size: 1200, progress_pct: 82 },
         { id: 'camp_cp001b', name: 'Re-engagement', status: 'paused', emails_sent_total: 131, campaign_size: 400, progress_pct: 33 },
       ],
-      metrics: m('cp001', W0, 187, 4, addDays(now, -2).toISOString()),
+      metricsByWeek: { [W0]: m('cp001', W0, 187, 4, addDays(now, -2).toISOString()) },
     },
     {
       id: 'kw001',
@@ -59,7 +59,7 @@ export function generateSeed(): DashboardClient[] {
       campaigns: [
         { id: 'camp_kw001', name: 'Mid-Market Push', status: 'running', emails_sent_total: 798, campaign_size: 900, progress_pct: 89 },
       ],
-      metrics: m('kw001', W0, 134, 5, addDays(now, 0).toISOString()),
+      metricsByWeek: { [W0]: m('kw001', W0, 134, 5, addDays(now, 0).toISOString()) },
     },
     {
       id: 'c21001',
@@ -73,7 +73,7 @@ export function generateSeed(): DashboardClient[] {
       campaigns: [
         { id: 'camp_c21001', name: 'Spring Campaign', status: 'paused', emails_sent_total: 731, campaign_size: 1100, progress_pct: 66 },
       ],
-      metrics: m('c21001', W0, 0, 1, addDays(now, -10).toISOString()),
+      metricsByWeek: { [W0]: m('c21001', W0, 0, 1, addDays(now, -10).toISOString()) },
     },
     {
       id: 'lf001',
@@ -88,7 +88,7 @@ export function generateSeed(): DashboardClient[] {
         { id: 'camp_lf001a', name: 'DC Metro Sequence', status: 'running', emails_sent_total: 730, campaign_size: 1100, progress_pct: 66 },
         { id: 'camp_lf001b', name: 'Virginia Follow-up', status: 'finished', emails_sent_total: 300, campaign_size: 300, progress_pct: 100 },
       ],
-      metrics: m('lf001', W0, 167, 7, addDays(now, -3).toISOString()),
+      metricsByWeek: { [W0]: m('lf001', W0, 167, 7, addDays(now, -3).toISOString()) },
     },
     {
       id: 'ev001',
@@ -102,7 +102,7 @@ export function generateSeed(): DashboardClient[] {
       campaigns: [
         { id: 'camp_ev001', name: 'Chicago Launch', status: 'running', emails_sent_total: 380, campaign_size: 600, progress_pct: 63 },
       ],
-      metrics: m('ev001', W0, 96, 3, addDays(now, -4).toISOString()),
+      metricsByWeek: { [W0]: m('ev001', W0, 96, 3, addDays(now, -4).toISOString()) },
     },
     {
       id: 'wr001',
@@ -116,7 +116,7 @@ export function generateSeed(): DashboardClient[] {
       campaigns: [
         { id: 'camp_wr001', name: 'New England Sequence', status: 'finished', emails_sent_total: 450, campaign_size: 450, progress_pct: 100 },
       ],
-      metrics: m('wr001', W0, 56, 1, addDays(now, -16).toISOString()),
+      metricsByWeek: { [W0]: m('wr001', W0, 56, 1, addDays(now, -16).toISOString()) },
     },
     {
       id: 'rf001',
@@ -130,7 +130,7 @@ export function generateSeed(): DashboardClient[] {
       campaigns: [
         { id: 'camp_rf001', name: 'West Coast Outreach', status: 'running', emails_sent_total: 152, campaign_size: 300, progress_pct: 51 },
       ],
-      metrics: m('rf001', W0, 79, 0, null),
+      metricsByWeek: { [W0]: m('rf001', W0, 79, 0, null) },
     },
   ];
 
