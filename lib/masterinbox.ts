@@ -82,19 +82,27 @@ export async function findLabelId(name: string): Promise<number | null> {
 }
 
 // Page through all prospects. The API ignores server-side filters; filtering
-// happens client-side in the sync script. Caps at 100 pages × pageSize for
-// safety — adjust if the workspace grows past that.
+// happens client-side in the sync script. The `metadata.total` field is only
+// reliable on page 1 — subsequent pages return total=-1, so we cache the page-1
+// total and stop when we've seen that many rows OR a short page comes back.
+// pageSize is capped at 100 by the API (larger values return empty).
 export async function listAllProspects(pageSize = 100): Promise<MasterInboxProspect[]> {
+  const safePageSize = Math.min(pageSize, 100);
   const all: MasterInboxProspect[] = [];
-  for (let page = 1; page <= 100; page++) {
+  let knownTotal: number | null = null;
+  for (let page = 1; page <= 200; page++) {
     const res = await call<ApiResponse<MasterInboxProspect[]>>('POST', '/get-prospects', {
       page,
-      limit: pageSize,
+      limit: safePageSize,
     });
     const batch = res.data ?? [];
     all.push(...batch);
-    const total = res.metadata?.total ?? 0;
-    if (batch.length === 0 || all.length >= total) break;
+    if (page === 1 && (res.metadata?.total ?? 0) > 0) {
+      knownTotal = res.metadata!.total!;
+    }
+    if (batch.length === 0) break;
+    if (batch.length < safePageSize) break;
+    if (knownTotal !== null && all.length >= knownTotal) break;
   }
   return all;
 }
