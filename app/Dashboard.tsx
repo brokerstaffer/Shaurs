@@ -52,7 +52,7 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   const [sortByLeft, setSortByLeft] = useState(false);
   const [campaignSelections, setCampaignSelections] = useState<Record<string, string>>({});
-  const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
+  const [campaignsPopupClientId, setCampaignsPopupClientId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(emptyModal);
   const [refreshing, setRefreshing] = useState(false);
@@ -347,15 +347,7 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
                       onCampaignChange={(camp) =>
                         setCampaignSelections((prev) => ({ ...prev, [c.id]: camp }))
                       }
-                      isExpanded={expandedClients.has(c.id)}
-                      onToggleExpanded={() =>
-                        setExpandedClients((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(c.id)) next.delete(c.id);
-                          else next.add(c.id);
-                          return next;
-                        })
-                      }
+                      onShowCampaigns={() => setCampaignsPopupClientId(c.id)}
                       onEdit={() => openEditModal(c)}
                       onDelete={() => deleteClient(c.id)}
                     />
@@ -479,8 +471,103 @@ export default function Dashboard({ initialClients, dataSource }: Props) {
         </div>
       </div>
 
+      {campaignsPopupClientId && (() => {
+        const c = clients.find((x) => x.id === campaignsPopupClientId);
+        if (!c) return null;
+        return (
+          <CampaignsPopup
+            client={c}
+            onClose={() => setCampaignsPopupClientId(null)}
+          />
+        );
+      })()}
+
       <div className={'toast' + (toast ? ' show' : '')}>{toast ?? ''}</div>
     </>
+  );
+}
+
+function CampaignsPopup({
+  client,
+  onClose,
+}: {
+  client: DashboardClient;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const camps = client.campaigns;
+  const running = camps.filter((c) => c.status === 'running').length;
+  const paused = camps.filter((c) => c.status === 'paused').length;
+  const finished = camps.filter((c) => c.status === 'finished').length;
+  const summaryParts: string[] = [];
+  if (running) summaryParts.push(`${running} running`);
+  if (paused) summaryParts.push(`${paused} paused`);
+  if (finished) summaryParts.push(`${finished} finished`);
+  const summary = summaryParts.join(' · ') || `${camps.length} total`;
+
+  // Sort: running first, then paused, then finished
+  const order: Record<string, number> = { running: 0, paused: 1, finished: 2 };
+  const sorted = [...camps].sort(
+    (a, b) => (order[a.status ?? 'finished'] ?? 9) - (order[b.status ?? 'finished'] ?? 9)
+  );
+
+  return (
+    <div
+      className="modal-overlay open"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal camps-popup">
+        <div className="camps-popup-header">
+          <div className="camps-popup-title">{client.name}</div>
+          <div className="camps-popup-sub">
+            {camps.length} {camps.length === 1 ? 'campaign' : 'campaigns'} · {summary}
+          </div>
+        </div>
+        <div className="camps-popup-body">
+          {sorted.map((c) => {
+            const status = c.status ?? 'finished';
+            const pct = Math.min(100, Math.max(0, Number(c.progress_pct ?? 0)));
+            const sent = c.emails_sent_total?.toLocaleString() ?? '0';
+            const size = c.campaign_size?.toLocaleString() ?? '0';
+            return (
+              <div key={c.id} className={`camps-popup-row is-${status}`}>
+                <span className="camp-status-pill">
+                  <span className="camp-pill-dot" />
+                  {status === 'running' ? 'Running' : status === 'paused' ? 'Paused' : 'Finished'}
+                </span>
+                <div className="camp-info">
+                  <div className="camp-info-name">{c.name}</div>
+                  <div className="camp-info-meta">
+                    <span>{sent} / {size}</span>
+                    <span>·</span>
+                    <span>{Math.round(pct)}%</span>
+                  </div>
+                  {c.campaign_size > 0 && (
+                    <div className="camp-mini-bar">
+                      <span style={{ width: `${pct}%` }} />
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="camps-popup-footer">
+          <button className="btn-secondary" onClick={onClose} style={{ flex: 'none', padding: '8px 18px' }}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -508,16 +595,14 @@ function ClientRow({
   client,
   campaignSelection,
   onCampaignChange,
-  isExpanded,
-  onToggleExpanded,
+  onShowCampaigns,
   onEdit,
   onDelete,
 }: {
   client: DashboardClient;
   campaignSelection: string;
   onCampaignChange: (id: string) => void;
-  isExpanded: boolean;
-  onToggleExpanded: () => void;
+  onShowCampaigns: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -649,40 +734,26 @@ function ClientRow({
   return (
     <tr>
       <td className="client-cell">
-        <button
-          className="client-header"
-          onClick={campsCount > 0 ? onToggleExpanded : undefined}
-          disabled={campsCount === 0}
-          aria-expanded={isExpanded}
-          aria-label={`${client.name}, ${campsLabel}${campsCount > 0 ? ', click to ' + (isExpanded ? 'collapse' : 'expand') : ''}`}
-        >
-          <div className="client-name">{client.name}</div>
-        </button>
+        <div className="client-name">{client.name}</div>
         {since && <div className="client-since">Since {since}</div>}
         <div
           className={
             'client-meta' +
-            (isExpanded ? ' is-open' : '') +
             (campsCount === 0 ? ' is-empty' : '') +
             (runningCount === 0 ? ' no-running' : '')
           }
-          onClick={campsCount > 0 ? onToggleExpanded : undefined}
+          onClick={campsCount > 0 ? onShowCampaigns : undefined}
           role={campsCount > 0 ? 'button' : undefined}
+          aria-label={
+            campsCount > 0
+              ? `View ${campsCount} campaign${campsCount === 1 ? '' : 's'}`
+              : 'No campaigns linked'
+          }
         >
           {campsCount > 0 && <span className="client-meta-dot" />}
           <span>{campsLabel}{runningCount > 0 ? ` · ${runningCount} running` : ''}</span>
-          {campsCount > 0 && <span className="client-meta-chevron">▾</span>}
+          {campsCount > 0 && <span className="client-meta-arrow">›</span>}
         </div>
-        {isExpanded && campsCount > 0 && (
-          <div className="client-camps">
-            {camps.map((c) => (
-              <div key={c.id} className={`camp-row is-${c.status}`}>
-                <span className="camp-dot" />
-                <span className="camp-name">{c.name}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </td>
       <td>{emailsCell}</td>
       <td>{introsCell}</td>
