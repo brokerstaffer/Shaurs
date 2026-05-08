@@ -19,7 +19,7 @@ import {
   progressPct,
 } from '../lib/instantly';
 import { addDays, weekKey } from '../lib/derive';
-import { listIntroductionLeads, type MasterInboxLead } from '../lib/masterinbox';
+import { findLabelId, listAllProspects, filterIntros } from '../lib/masterinbox';
 
 interface SyncResult {
   instantly: { ok: boolean; error?: string; campaigns?: number };
@@ -126,33 +126,73 @@ async function runMasterInbox(): Promise<SyncResult['masterinbox']> {
     .single();
 
   try {
+    // 1. Find the "Introduction" label id
+    const introLabelId = await findLabelId('Introduction');
+    if (introLabelId === null) {
+      throw new Error('"Introduction" label not found in MasterInbox workspace');
+    }
+
+    // 2. Pull all prospects (server-side filters are silently ignored)
+    const prospects = await listAllProspects(100);
+
+    // 3. Filter to prospects labeled Introduction within current ISO week,
+    //    using updated_at as the best available "labeled at" proxy.
     const monday = weekKey(new Date());
-    const sunday = addDays(monday, 6).toISOString().split('T')[0];
-    const leads = await listIntroductionLeads(monday, sunday);
+    const sundayDate = addDays(monday, 7); // exclusive end (next Monday 00:00)
+    const startMs = new Date(monday + 'T00:00:00').getTime();
+    const endMs = sundayDate.getTime();
 
-    const byIdent = new Map<string, { count: number; latest: string | null }>();
-    leads.forEach((lead: MasterInboxLead) => {
-      const id = lead.client_identifier;
-      if (!id) return;
-      const cur = byIdent.get(id) ?? { count: 0, latest: null };
+    const intros = filterIntros(prospects, introLabelId, startMs, endMs);
+
+    // 4. Roll up by Instantly campaign_id, since clients link to Instantly campaigns.
+    const byCampaign = new Map<string, { count: number; latest: number | null }>();
+    for (const p of intros) {
+      if (!p.campaign_id) continue;
+      const cur = byCampaign.get(p.campaign_id) ?? { count: 0, latest: null };
       cur.count++;
-      if (lead.labeled_at && (!cur.latest || lead.labeled_at > cur.latest)) {
-        cur.latest = lead.labeled_at;
-      }
-      byIdent.set(id, cur);
-    });
+      if (!cur.latest || p.updated_at > cur.latest) cur.latest = p.updated_at;
+      byCampaign.set(p.campaign_id, cur);
+    }
 
-    const { data: clients } = await sb.from('clients').select('id, masterinbox_identifier');
+    // For "Last Intro" we also want the most recent intro EVER, regardless of
+    // week. Compute per-campaign max(updated_at) over all-time intros too.
+    const allIntros = prospects.filter((p) => p.labels?.includes(introLabelId));
+    const allTimeLatestByCampaign = new Map<string, number>();
+    for (const p of allIntros) {
+      if (!p.campaign_id) continue;
+      const cur = allTimeLatestByCampaign.get(p.campaign_id) ?? 0;
+      if (p.updated_at > cur) allTimeLatestByCampaign.set(p.campaign_id, p.updated_at);
+    }
+
+    // 5. Upsert per-client weekly metrics by summing across each client's
+    //    linked Instantly campaigns.
+    const { data: clients } = await sb
+      .from('clients')
+      .select('id, instantly_campaign_ids');
     if (clients) {
-      for (const c of clients as { id: string; masterinbox_identifier: string | null }[]) {
-        if (!c.masterinbox_identifier) continue;
-        const stats = byIdent.get(c.masterinbox_identifier) ?? { count: 0, latest: null };
+      for (const c of clients as { id: string; instantly_campaign_ids: string[] }[]) {
+        let count = 0;
+        let latestThisWeek: number | null = null;
+        let latestAllTime: number | null = null;
+        for (const cid of c.instantly_campaign_ids ?? []) {
+          const week = byCampaign.get(cid);
+          if (week) {
+            count += week.count;
+            if (week.latest && (!latestThisWeek || week.latest > latestThisWeek)) latestThisWeek = week.latest;
+          }
+          const all = allTimeLatestByCampaign.get(cid);
+          if (all && (!latestAllTime || all > latestAllTime)) latestAllTime = all;
+        }
+        const lastIntroIso =
+          (latestThisWeek ?? latestAllTime)
+            ? new Date((latestThisWeek ?? latestAllTime) as number).toISOString()
+            : null;
         await sb.from('weekly_metrics').upsert(
           {
             client_id: c.id,
             week_key: monday,
-            intros: stats.count,
-            last_intro_at: stats.latest,
+            intros: count,
+            last_intro_at: lastIntroIso,
           },
           { onConflict: 'client_id,week_key', ignoreDuplicates: false }
         );
@@ -163,7 +203,7 @@ async function runMasterInbox(): Promise<SyncResult['masterinbox']> {
       .from('sync_runs')
       .update({ ok: true, finished_at: new Date().toISOString() })
       .eq('id', run?.id);
-    return { ok: true, intros: leads.length };
+    return { ok: true, intros: intros.length };
   } catch (err) {
     const message = (err as Error).message;
     await sb
