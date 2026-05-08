@@ -44,6 +44,14 @@ function norm(s: string): string {
     .trim();
 }
 
+// Manual overrides for clients whose name doesn't appear verbatim in any
+// Instantly campaign name. The value is a list of campaign-name prefixes
+// (case-insensitive, normalized) — any campaign whose name starts with one
+// of these prefixes will be linked to this client.
+const MANUAL_LINKS: Record<string, string[]> = {
+  'Howe Realty Group': ['howe realty'],
+};
+
 async function main() {
   const sb = getSupabase();
   const campaigns = await listCampaigns();
@@ -57,7 +65,12 @@ async function main() {
 
   for (const client of CLIENTS) {
     const cnorm = norm(client.name);
-    const matched = campaigns.filter((c) => norm(c.name).includes(cnorm));
+    const overrides = MANUAL_LINKS[client.name] ?? [];
+    const matched = campaigns.filter((c) => {
+      const cn = norm(c.name);
+      if (cn.includes(cnorm)) return true;
+      return overrides.some((prefix) => cn.startsWith(norm(prefix)));
+    });
     const ids = matched.map((c) => c.id);
 
     const existingId = existingByName.get(client.name);
