@@ -55,7 +55,41 @@ export async function DELETE(req: NextRequest) {
   const id = url.searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
   const sb = getSupabase();
-  const { error } = await sb.from('clients').delete().eq('id', id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  return NextResponse.json({ ok: true });
+
+  // 1. Read the client's linked campaign IDs so we can clean up orphans afterwards.
+  const { data: clientRow, error: readErr } = await sb
+    .from('clients')
+    .select('instantly_campaign_ids')
+    .eq('id', id)
+    .single();
+  if (readErr) return NextResponse.json({ error: readErr.message }, { status: 400 });
+  const linkedCampaignIds: string[] = clientRow?.instantly_campaign_ids ?? [];
+
+  // 2. Delete the client. weekly_metrics rows cascade automatically
+  //    (FK on weekly_metrics.client_id is ON DELETE CASCADE).
+  const { error: delErr } = await sb.from('clients').delete().eq('id', id);
+  if (delErr) return NextResponse.json({ error: delErr.message }, { status: 400 });
+
+  // 3. For each previously linked campaign, drop it from instantly_campaigns
+  //    if no OTHER client still references it. The next sync will re-add it
+  //    if it still exists in Instantly — but until then the row is gone, so
+  //    re-adding the same client doesn't show stale campaign data.
+  let orphansRemoved = 0;
+  for (const campaignId of linkedCampaignIds) {
+    const { data: stillLinked, error: lookupErr } = await sb
+      .from('clients')
+      .select('id')
+      .contains('instantly_campaign_ids', [campaignId])
+      .limit(1);
+    if (lookupErr) continue;
+    if (!stillLinked || stillLinked.length === 0) {
+      const { error: campDelErr } = await sb
+        .from('instantly_campaigns')
+        .delete()
+        .eq('id', campaignId);
+      if (!campDelErr) orphansRemoved++;
+    }
+  }
+
+  return NextResponse.json({ ok: true, orphansRemoved });
 }

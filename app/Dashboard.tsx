@@ -209,14 +209,22 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
   }
 
   async function deleteClient(id: string) {
-    if (!confirm('Remove this client? Their weekly metrics will also be deleted from Supabase.')) return;
+    const client = clients.find((c) => c.id === id);
+    const linkedCount = client?.instantly_campaign_ids.length ?? 0;
+    const detail = linkedCount > 0
+      ? `Removing this client will also delete their weekly metrics and ${linkedCount} linked Instantly campaign cache row${linkedCount === 1 ? '' : 's'} (campaigns linked to no other client). Continue?`
+      : `Remove this client? Their weekly metrics will also be deleted from Supabase.`;
+    if (!confirm(detail)) return;
     try {
       const res = await fetch(`/api/clients?id=${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
-      // Optimistic remove + server re-fetch. The FK cascade on
-      // weekly_metrics.client_id wipes that client's metric rows in one shot.
+      const result = (await res.json()) as { ok: boolean; orphansRemoved?: number };
       setClients((list) => list.filter((c) => c.id !== id));
-      setToast('Client and its weekly metrics removed');
+      const removedParts = ['client', 'weekly metrics'];
+      if (result.orphansRemoved && result.orphansRemoved > 0) {
+        removedParts.push(`${result.orphansRemoved} orphan campaign${result.orphansRemoved === 1 ? '' : 's'}`);
+      }
+      setToast(`Removed: ${removedParts.join(' + ')}`);
       router.refresh();
     } catch (err) {
       setToast(`Delete failed: ${(err as Error).message.slice(0, 80)}`);
