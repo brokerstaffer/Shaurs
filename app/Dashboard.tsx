@@ -9,6 +9,7 @@ import {
   isCurrentWeek,
   weekKey,
 } from '@/lib/derive';
+import { autoMatchCampaignIds } from '@/lib/matchCampaigns';
 import {
   PLAN_BADGE_CLASS,
   PLAN_DEFAULT_TARGET,
@@ -33,8 +34,6 @@ interface ModalState {
   plan: Plan;
   startDate: string;
   weeklyTarget: number;
-  selectedCampaignIds: string[];
-  campaignSearch: string;
 }
 
 const emptyModal: ModalState = {
@@ -44,8 +43,6 @@ const emptyModal: ModalState = {
   plan: 'production',
   startDate: '',
   weeklyTarget: PLAN_DEFAULT_TARGET.production,
-  selectedCampaignIds: [],
-  campaignSearch: '',
 };
 
 export default function Dashboard({ initialClients, allInstantlyCampaigns, dataSource }: Props) {
@@ -140,8 +137,6 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
       plan: c.plan,
       startDate: c.start_date ?? '',
       weeklyTarget: c.weekly_target,
-      selectedCampaignIds: [...c.instantly_campaign_ids],
-      campaignSearch: '',
     });
   }
 
@@ -152,12 +147,15 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
   async function saveClient() {
     const name = modal.name.trim();
     if (!name) return;
+    // Auto-link any Instantly campaign whose name contains this client name
+    // (whole-name match + MANUAL_LINKS overrides). Same rule as the seed script.
+    const linkedIds = autoMatchCampaignIds(name, allInstantlyCampaigns);
     const payload = {
       name,
       plan: modal.plan,
       weekly_target: modal.weeklyTarget,
       start_date: modal.startDate || null,
-      instantly_campaign_ids: modal.selectedCampaignIds,
+      instantly_campaign_ids: linkedIds,
     };
     try {
       if (modal.editingId) {
@@ -224,49 +222,12 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
     }
   }
 
-  // Full Instantly campaign list (all 93 from /campaigns), for the modal picker.
-  // Sorted alphabetically.
-  const allKnownCampaigns = useMemo(
-    () =>
-      [...allInstantlyCampaigns]
-        .map((c) => ({ id: c.id, name: c.name }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [allInstantlyCampaigns]
-  );
-
-  // Whole-name match: same rule the seed script uses. A campaign matches if
-  // its (normalized) name contains the (normalized) client name as a substring.
-  function normalizeForMatch(s: string): string {
-    return s
-      .toLowerCase()
-      .replace(/[.,()]/g, '')
-      .replace(/&/g, 'and')
-      .replace(/[-_/]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-  function autoMatchCampaigns(clientName: string): string[] {
-    const cnorm = normalizeForMatch(clientName);
-    if (!cnorm) return [];
-    return allKnownCampaigns.filter((c) => normalizeForMatch(c.name).includes(cnorm)).map((c) => c.id);
-  }
-
-  function setName(name: string) {
-    setModal((m) => {
-      // When the user types a name on a NEW client, auto-check campaigns whose
-      // name contains the exact client name (whole-name match). On edit, leave
-      // the existing selection alone — they may have manually curated it.
-      if (m.editingId) return { ...m, name };
-      return { ...m, name, selectedCampaignIds: autoMatchCampaigns(name) };
-    });
-  }
-
-  // Filter campaigns by the search text in the modal.
-  const filteredCampaigns = useMemo(() => {
-    const q = modal.campaignSearch.trim().toLowerCase();
-    if (!q) return allKnownCampaigns;
-    return allKnownCampaigns.filter((c) => c.name.toLowerCase().includes(q));
-  }, [allKnownCampaigns, modal.campaignSearch]);
+  // Preview the campaigns that will be auto-linked when saving. Updates live
+  // as the user types so they can see what will happen.
+  const previewLinkedCount = useMemo(() => {
+    const ids = autoMatchCampaignIds(modal.name, allInstantlyCampaigns);
+    return ids.length;
+  }, [modal.name, allInstantlyCampaigns]);
 
   return (
     <>
@@ -402,8 +363,15 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
               type="text"
               value={modal.name}
               placeholder="e.g. Premier Metro Realty"
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => setModal((m) => ({ ...m, name: e.target.value }))}
             />
+            <div className="form-help">
+              {modal.name.trim() === ''
+                ? 'Instantly campaigns whose name contains this client name are auto-linked on save.'
+                : previewLinkedCount === 0
+                  ? `No Instantly campaign contains "${modal.name.trim()}" — this client will be saved without any linked campaigns.`
+                  : `Will auto-link ${previewLinkedCount} matching Instantly campaign${previewLinkedCount === 1 ? '' : 's'}.`}
+            </div>
           </div>
 
           <div className="form-group">
@@ -451,57 +419,6 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
             />
           </div>
 
-          <div className="form-group">
-            <label>
-              Linked Instantly Campaigns
-              {modal.selectedCampaignIds.length > 0 && (
-                <span style={{ color: 'var(--text-muted)', fontWeight: 500, marginLeft: 6 }}>
-                  · {modal.selectedCampaignIds.length} selected
-                </span>
-              )}
-            </label>
-            {allKnownCampaigns.length === 0 ? (
-              <div className="form-help">No campaigns synced yet. Run a sync to populate this list.</div>
-            ) : (
-              <>
-                <input
-                  type="text"
-                  value={modal.campaignSearch}
-                  placeholder={`Search ${allKnownCampaigns.length} campaigns…`}
-                  onChange={(e) => setModal((m) => ({ ...m, campaignSearch: e.target.value }))}
-                  style={{ marginBottom: 8 }}
-                />
-                <div className="multi-list">
-                  {filteredCampaigns.length === 0 ? (
-                    <div className="form-help" style={{ padding: '6px 6px' }}>No campaigns match "{modal.campaignSearch}".</div>
-                  ) : (
-                    filteredCampaigns.map((camp) => (
-                      <label key={camp.id}>
-                        <input
-                          type="checkbox"
-                          checked={modal.selectedCampaignIds.includes(camp.id)}
-                          onChange={(e) =>
-                            setModal((m) => ({
-                              ...m,
-                              selectedCampaignIds: e.target.checked
-                                ? [...m.selectedCampaignIds, camp.id]
-                                : m.selectedCampaignIds.filter((x) => x !== camp.id),
-                            }))
-                          }
-                        />
-                        {camp.name}
-                      </label>
-                    ))
-                  )}
-                </div>
-                <div className="form-help">
-                  {modal.editingId
-                    ? 'Edit selections manually.'
-                    : 'Auto-checks any campaign whose name contains your client name. Refine if needed.'}
-                </div>
-              </>
-            )}
-          </div>
 
           <div className="modal-actions">
             <button className="btn-secondary" onClick={closeModal}>Cancel</button>

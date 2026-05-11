@@ -5,6 +5,7 @@
 
 import { getSupabase } from '../lib/supabase';
 import { listCampaigns } from '../lib/instantly';
+import { autoMatchCampaigns } from '../lib/matchCampaigns';
 import { PLAN_DEFAULT_TARGET, type Plan } from '../lib/types';
 
 const CLIENTS: { name: string; plan: Plan }[] = [
@@ -34,23 +35,6 @@ const CLIENTS: { name: string; plan: Plan }[] = [
   { name: 'JM properties', plan: 'production' },
 ];
 
-function norm(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[.,()]/g, '')
-    .replace(/&/g, 'and')
-    .replace(/[-_/]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-// Manual overrides for clients whose name doesn't appear verbatim in any
-// Instantly campaign name. The value is a list of campaign-name prefixes
-// (case-insensitive, normalized) — any campaign whose name starts with one
-// of these prefixes will be linked to this client.
-const MANUAL_LINKS: Record<string, string[]> = {
-  'Howe Realty Group': ['howe realty'],
-};
 
 async function main() {
   const sb = getSupabase();
@@ -64,13 +48,7 @@ async function main() {
   let updated = 0;
 
   for (const client of CLIENTS) {
-    const cnorm = norm(client.name);
-    const overrides = MANUAL_LINKS[client.name] ?? [];
-    const matched = campaigns.filter((c) => {
-      const cn = norm(c.name);
-      if (cn.includes(cnorm)) return true;
-      return overrides.some((prefix) => cn.startsWith(norm(prefix)));
-    });
+    const matched = autoMatchCampaigns(client.name, campaigns);
     const ids = matched.map((c) => c.id);
 
     const existingId = existingByName.get(client.name);
