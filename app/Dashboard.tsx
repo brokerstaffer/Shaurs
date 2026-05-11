@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   addDays,
   derive,
@@ -46,6 +47,7 @@ const emptyModal: ModalState = {
 };
 
 export default function Dashboard({ initialClients, allInstantlyCampaigns, dataSource }: Props) {
+  const router = useRouter();
   const [clients, setClients] = useState<DashboardClient[]>(initialClients);
   const [currentMonday, setCurrentMonday] = useState<Date>(() => getMondayOf(new Date()));
   const [filter, setFilter] = useState<Filter>('all');
@@ -55,6 +57,14 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
   const [toast, setToast] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(emptyModal);
   const [refreshing, setRefreshing] = useState(false);
+
+  // When the server re-fetches the dashboard (e.g. after router.refresh()),
+  // re-prime the local clients state from the new server props. Without this,
+  // local edits via the modal would be overwritten too eagerly, but with this
+  // any external change (new sync, manual SQL change) is reflected.
+  useEffect(() => {
+    setClients(initialClients);
+  }, [initialClients]);
 
   // Set initial start date for the modal once on mount.
   useEffect(() => {
@@ -190,18 +200,24 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
         setToast('Client added');
       }
       closeModal();
+      // Pull fresh server state so the row reflects newly-linked campaigns
+      // and any metrics that already exist in Supabase.
+      router.refresh();
     } catch (err) {
       setToast(`Save failed: ${(err as Error).message.slice(0, 80)}`);
     }
   }
 
   async function deleteClient(id: string) {
-    if (!confirm('Remove this client?')) return;
+    if (!confirm('Remove this client? Their weekly metrics will also be deleted from Supabase.')) return;
     try {
       const res = await fetch(`/api/clients?id=${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
+      // Optimistic remove + server re-fetch. The FK cascade on
+      // weekly_metrics.client_id wipes that client's metric rows in one shot.
       setClients((list) => list.filter((c) => c.id !== id));
-      setToast('Client removed');
+      setToast('Client and its weekly metrics removed');
+      router.refresh();
     } catch (err) {
       setToast(`Delete failed: ${(err as Error).message.slice(0, 80)}`);
     }
@@ -212,9 +228,21 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
     try {
       const res = await fetch('/api/sync/run', { method: 'POST' });
       if (!res.ok) throw new Error(`Sync failed: ${res.status}`);
-      setToast('Sync triggered');
-      // In real deployment, page is server-rendered from Supabase on next load.
-      // Here we just acknowledge.
+      const data = (await res.json()) as {
+        ok: boolean;
+        result?: {
+          instantly?: { campaigns?: number };
+          masterinbox?: { intros?: number; skipped?: boolean };
+        };
+      };
+      // Re-fetch the server component so newly synced data shows up immediately.
+      router.refresh();
+      const r = data.result ?? {};
+      const parts: string[] = [];
+      if (r.instantly?.campaigns !== undefined) parts.push(`${r.instantly.campaigns} campaigns`);
+      if (r.masterinbox?.skipped) parts.push('MasterInbox skipped');
+      else if (r.masterinbox?.intros !== undefined) parts.push(`${r.masterinbox.intros} intros`);
+      setToast(`Synced · ${parts.join(' · ')}`);
     } catch (err) {
       setToast(`Sync error: ${(err as Error).message}`);
     } finally {
