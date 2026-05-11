@@ -13,6 +13,7 @@ import {
 } from '../lib/instantly';
 import { addDays, getMondayOf, weekKey } from '../lib/derive';
 import { findLabelId, listAllProspects } from '../lib/masterinbox';
+import { autoMatchCampaignIds } from '../lib/matchCampaigns';
 import { HISTORICAL_WEEKS } from '../lib/types';
 
 interface SyncResult {
@@ -71,6 +72,27 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
     if (campaignRows.length > 0) {
       const { error } = await sb.from('instantly_campaigns').upsert(campaignRows);
       if (error) throw new Error(error.message);
+    }
+
+    // AUTO-RELINK every client to its matching campaigns on every sync, using
+    // the same whole-name-match rule the seed script and the modal use.
+    // Self-heals delete-then-readd: the modal's autoMatch runs against the
+    // page's snapshot of campaigns, which can be stale if the user just
+    // deleted a client whose orphans were cleaned up. The sync's view is
+    // authoritative — re-derive ids from the fresh campaign list.
+    const namedCampaigns = campaigns.map((c) => ({ id: c.id, name: c.name }));
+    const { data: clientsForRelink } = await sb
+      .from('clients')
+      .select('id, name, instantly_campaign_ids');
+    if (clientsForRelink) {
+      for (const c of clientsForRelink as { id: string; name: string; instantly_campaign_ids: string[] }[]) {
+        const expected = autoMatchCampaignIds(c.name, namedCampaigns).sort();
+        const current = [...(c.instantly_campaign_ids ?? [])].sort();
+        const same = expected.length === current.length && expected.every((id, i) => id === current[i]);
+        if (!same) {
+          await sb.from('clients').update({ instantly_campaign_ids: expected }).eq('id', c.id);
+        }
+      }
     }
 
     // Pull each linked campaign's daily-analytics across the entire backfill
