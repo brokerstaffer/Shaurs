@@ -186,13 +186,22 @@ async function runMasterInbox(): Promise<SyncResult['masterinbox']> {
     const { mondayKeys } = backfillWindow();
     const validWeekSet = new Set(mondayKeys);
 
+    // Pick the most reliable "this prospect became an Introduction at T"
+    // timestamp. last_message is when the most recent email arrived for the
+    // prospect — this is what the MasterInbox UI shows in its date column,
+    // and stays put unless the conversation continues. updated_at is too
+    // noisy (any edit bumps it), so we only fall back to it if last_message
+    // and last_received_at are both missing.
+    const introTime = (p: typeof intros[number]): number =>
+      p.last_message ?? p.last_received_at ?? p.updated_at;
+
     // (campaign_id, weekKey) -> { count, latest_ms }
     const byCampaignWeek = new Map<string, { count: number; latest: number }>();
     // campaign_id -> latest_ms (any time, for "Last Intro" fallback)
     const allTimeLatest = new Map<string, number>();
 
     for (const p of intros) {
-      const t = p.updated_at;
+      const t = introTime(p);
       const wk = weekKey(new Date(t));
 
       const allKey = p.campaign_id!;
