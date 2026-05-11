@@ -498,12 +498,11 @@ function CampaignsPopup({
 
   // Only active campaigns are surfaced in the dashboard.
   const camps = client.campaigns.filter((c) => c.status === 'running');
-  const totalSize = camps.reduce((a, b) => a + b.campaign_size, 0);
   const totalSent = camps.reduce((a, b) => a + b.emails_sent_total, 0);
   const summary =
     camps.length === 0
       ? 'No active campaigns'
-      : `${totalSent.toLocaleString()} / ${totalSize.toLocaleString()} sent`;
+      : `${totalSent.toLocaleString()} emails sent`;
 
   return (
     <div
@@ -531,25 +530,21 @@ function CampaignsPopup({
             camps.map((c) => {
               const pct = Math.min(100, Math.max(0, Number(c.progress_pct ?? 0)));
               const sent = c.emails_sent_total?.toLocaleString() ?? '0';
-              const size = c.campaign_size?.toLocaleString() ?? '0';
               return (
                 <div key={c.id} className="camps-popup-row is-running">
-                  <span className="camp-status-pill">
-                    <span className="camp-pill-dot" />
-                    Running
-                  </span>
-                  <div className="camp-info">
+                  <div className="camp-row-head">
                     <div className="camp-info-name">{c.name}</div>
-                    <div className="camp-info-meta">
-                      <span>{sent} / {size}</span>
-                      <span>·</span>
-                      <span>{Math.round(pct)}%</span>
-                    </div>
-                    {c.campaign_size > 0 && (
-                      <div className="camp-mini-bar">
-                        <span style={{ width: `${pct}%` }} />
-                      </div>
-                    )}
+                    <div className="camp-pct">{Math.round(pct)}%</div>
+                  </div>
+                  <div className="camp-mini-bar">
+                    <span style={{ width: `${pct}%` }} />
+                  </div>
+                  <div className="camp-row-foot">
+                    <span><strong>{sent}</strong> emails sent</span>
+                    <span className="camp-status-chip">
+                      <span className="chip-dot" />
+                      Running
+                    </span>
                   </div>
                 </div>
               );
