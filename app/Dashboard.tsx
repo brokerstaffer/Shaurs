@@ -546,6 +546,8 @@ function CampaignsPopup({
             camps.map((c) => {
               const pct = Math.min(100, Math.max(0, Number(c.progress_pct ?? 0)));
               const sent = c.emails_sent_total?.toLocaleString() ?? '0';
+              const total = c.campaign_size ?? 0;
+              const completed = Math.round(total * (pct / 100));
               return (
                 <div key={c.id} className="camps-popup-row is-running">
                   <div className="camp-row-head">
@@ -556,7 +558,11 @@ function CampaignsPopup({
                     <span style={{ width: `${pct}%` }} />
                   </div>
                   <div className="camp-row-foot">
-                    <span><strong>{sent}</strong> emails sent</span>
+                    <span>
+                      <strong>{completed.toLocaleString()}</strong> / {total.toLocaleString()} leads
+                      <span style={{ margin: '0 6px', opacity: 0.4 }}>·</span>
+                      <strong>{sent}</strong> emails sent
+                    </span>
                     <span className="camp-status-chip">
                       <span className="chip-dot" />
                       Running
@@ -676,13 +682,30 @@ function ClientRow({
         ? null
         : activeCampaigns.find((c) => c.id === campaignSelection) ?? null;
 
-    const activeAvgPct =
-      activeCampaigns.reduce((a, b) => a + (b.progress_pct || 0), 0) / activeCampaigns.length;
-
     const sent = selected
       ? selected.emails_sent_total
       : activeCampaigns.reduce((a, b) => a + b.emails_sent_total, 0);
-    const pct = selected ? selected.progress_pct : Math.round(activeAvgPct);
+
+    // X / Y in the cell = completed leads / total leads. campaign_size is the
+    // total (leads_count from Instantly); completed is back-computed from the
+    // stored progress_pct. Two-decimal precision in DB keeps this exact.
+    const totalLeads = selected
+      ? selected.campaign_size
+      : activeCampaigns.reduce((a, b) => a + b.campaign_size, 0);
+    const completedLeads = selected
+      ? Math.round(selected.campaign_size * (selected.progress_pct / 100))
+      : activeCampaigns.reduce(
+          (a, b) => a + Math.round(b.campaign_size * (b.progress_pct / 100)),
+          0,
+        );
+    // Weighted % across multiple campaigns — sum-of-completed / sum-of-leads,
+    // not the simple average of per-campaign rates (which would over-weight
+    // small campaigns).
+    const pct = selected
+      ? selected.progress_pct
+      : totalLeads > 0
+        ? (completedLeads / totalLeads) * 100
+        : 0;
 
     campaignCell = (
       <div className="monthly-cell">
@@ -699,7 +722,9 @@ function ClientRow({
           </select>
         )}
         <div className="monthly-label">
-          <span className="monthly-count">{sent.toLocaleString()} sent</span>
+          <span className="monthly-count">
+            {completedLeads.toLocaleString()} / {totalLeads.toLocaleString()}
+          </span>
           <span className="monthly-pct">{Math.round(pct)}%</span>
         </div>
         <div className="progress-track">
@@ -707,7 +732,7 @@ function ClientRow({
         </div>
         <div className="campaign-tag ct-active">
           <span className="ct-dot" />
-          Running
+          {sent.toLocaleString()} sent · Running
         </div>
       </div>
     );
