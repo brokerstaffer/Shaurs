@@ -123,16 +123,16 @@ export function mapStatus(raw: number | string | undefined | null): 'running' | 
   }
 }
 
-// Progress %: completed / (leads_count + completed_count). leads_count tracks
-// remaining leads to be contacted; completed_count tracks fully-sequenced ones.
-// Fall back to contacted/total if completed is 0.
+// leads_count IS the total leads in the campaign — completed_count is a
+// subset, not a separate bucket to add. Verified against a finished campaign
+// (Keyes-Florida-West): leads=199, completed=183, bounced=16 → 199 = 183 + 16
+// exactly. So progress = completed / leads matches Instantly's own UI %.
 export function progressPct(a: InstantlyAnalyticsItem): number {
-  const total = (a.leads_count ?? 0) + (a.completed_count ?? 0);
+  const total = a.leads_count ?? 0;
   if (total <= 0) return 0;
-  return Math.min(100, (a.completed_count / total) * 100);
+  return Math.min(100, ((a.completed_count ?? 0) / total) * 100);
 }
 
-// "Campaign size" = total leads ever loaded into the campaign.
 export function campaignSize(a: InstantlyAnalyticsItem): number {
-  return (a.leads_count ?? 0) + (a.completed_count ?? 0);
+  return a.leads_count ?? 0;
 }

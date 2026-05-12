@@ -46,6 +46,17 @@ const emptyModal: ModalState = {
   weeklyTarget: PLAN_DEFAULT_TARGET.production,
 };
 
+// User-local "today" as YYYY-MM-DD. new Date().toISOString() returns UTC,
+// which can be yesterday for IST users in the early morning — show local
+// calendar date instead.
+function todayLocalISO(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export default function Dashboard({ initialClients, allInstantlyCampaigns, dataSource }: Props) {
   const router = useRouter();
   const [clients, setClients] = useState<DashboardClient[]>(initialClients);
@@ -68,7 +79,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
 
   // Set initial start date for the modal once on mount.
   useEffect(() => {
-    setModal((m) => ({ ...m, startDate: new Date().toISOString().split('T')[0] }));
+    setModal((m) => ({ ...m, startDate: todayLocalISO() }));
   }, []);
 
   useEffect(() => {
@@ -135,7 +146,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
     setModal({
       ...emptyModal,
       open: true,
-      startDate: new Date().toISOString().split('T')[0],
+      startDate: todayLocalISO(),
     });
   }
 
@@ -518,6 +529,11 @@ function CampaignsPopup({
             {camps.length} active {camps.length === 1 ? 'campaign' : 'campaigns'}
             {camps.length > 0 ? ` · ${summary}` : ''}
           </div>
+          {camps.length > 0 && (
+            <div className="camps-popup-note">
+              Email counts include every sequence step + subsequences. Matches Instantly&apos;s campaign total, not its Step Analytics view.
+            </div>
+          )}
         </div>
         <div className="camps-popup-body">
           {camps.length === 0 ? (
@@ -666,9 +682,6 @@ function ClientRow({
     const sent = selected
       ? selected.emails_sent_total
       : activeCampaigns.reduce((a, b) => a + b.emails_sent_total, 0);
-    const size = selected
-      ? selected.campaign_size
-      : activeCampaigns.reduce((a, b) => a + b.campaign_size, 0);
     const pct = selected ? selected.progress_pct : Math.round(activeAvgPct);
 
     campaignCell = (
@@ -686,9 +699,7 @@ function ClientRow({
           </select>
         )}
         <div className="monthly-label">
-          <span className="monthly-count">
-            {sent.toLocaleString()} / {size.toLocaleString()}
-          </span>
+          <span className="monthly-count">{sent.toLocaleString()} sent</span>
           <span className="monthly-pct">{Math.round(pct)}%</span>
         </div>
         <div className="progress-track">
