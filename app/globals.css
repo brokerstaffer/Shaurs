@@ -118,7 +118,9 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.25; } }
 
 /* Campaigns popup */
-.camps-popup { max-width: 720px; width: min(720px, 95vw); padding: 0; }
+/* Higher specificity (.modal.camps-popup) so the base `.modal { max-width: 440px }`
+   rule defined later in this file doesn't win on source-order tie. */
+.modal.camps-popup { max-width: 760px; width: min(760px, 95vw); padding: 0; }
 .camps-popup-header {
   padding: 24px 28px 18px;
 }
