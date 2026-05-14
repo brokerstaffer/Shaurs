@@ -613,7 +613,7 @@ function CampaignsPopup({
           <div className="camps-popup-sub">
             {running.length} active {running.length === 1 ? 'campaign' : 'campaigns'}
             {running.length > 0 ? ` · ${summary}` : ''}
-            {sorted.length > running.length && ` · ${sorted.length - running.length} paused / completed`}
+            {sorted.length > running.length && ` · ${sorted.length - running.length} paused / finished`}
           </div>
           {sorted.length > 0 && (
             <div className="camps-popup-note">
@@ -643,23 +643,30 @@ function CampaignsPopup({
                     : c.status === 'finished'
                       ? 'is-finished'
                       : '';
-              const chip =
-                c.status === 'paused' ? (
-                  <span className="camp-status-chip camp-status-paused">
-                    <span className="chip-dot" />
-                    Paused since {statusChangeDate(c.status_changed_at)}
-                  </span>
-                ) : c.status === 'finished' ? (
-                  <span className="camp-status-chip camp-status-finished">
-                    <span className="chip-dot" />
-                    Completed {statusChangeDate(c.status_changed_at)}
-                  </span>
-                ) : (
-                  <span className="camp-status-chip">
-                    <span className="chip-dot" />
-                    Running
-                  </span>
-                );
+              // "Finished" instead of "Completed" — Instantly marks a campaign
+              // status=3 once it has exhausted its lead list, regardless of how
+              // many leads bounced/skipped. So progress % can be < 100 even when
+              // the campaign is officially done. "Finished" reads as end-of-life,
+              // not as "100% delivered" the way "Completed" did.
+              const statusLabel =
+                c.status === 'paused'
+                  ? 'Paused'
+                  : c.status === 'finished'
+                    ? 'Finished'
+                    : c.status === 'running'
+                      ? 'Running'
+                      : 'Draft';
+              const dateText =
+                c.status === 'paused' || c.status === 'finished'
+                  ? statusChangeDate(c.status_changed_at)
+                  : null;
+              const chip = (
+                <span className="camp-status-chip">
+                  <span className="chip-dot" />
+                  <span className="chip-label">{statusLabel}</span>
+                  {dateText && <span className="chip-date">· {dateText}</span>}
+                </span>
+              );
               return (
                 <div key={`${c.source}:${c.id}`} className={`camps-popup-row ${rowCls}`}>
                   <div className="camp-row-head">

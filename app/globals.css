@@ -181,16 +181,35 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
   font-weight: 700; color: var(--text);
 }
 .camps-popup-row .camp-status-chip {
-  display: inline-flex; align-items: center; gap: 5px;
+  display: inline-flex; align-items: center; gap: 6px;
   font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.4px;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+.camps-popup-row .camp-status-chip .chip-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+  flex-shrink: 0;
+}
+.camps-popup-row .camp-status-chip .chip-label {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  line-height: 1.2;
+}
+.camps-popup-row .camp-status-chip .chip-date {
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
 }
 .camps-popup-row.is-running  .camp-status-chip { color: var(--green); }
 .camps-popup-row.is-paused   .camp-status-chip { color: var(--yellow); }
 .camps-popup-row.is-finished .camp-status-chip { color: var(--text-muted); }
-.camps-popup-row .camp-status-chip .chip-dot {
-  width: 6px; height: 6px; border-radius: 50%; background: currentColor;
-}
 .camps-popup-row.is-running .camp-status-chip .chip-dot { animation: blink 1.4s infinite; }
 
 /* Vendor source chip (Instantly / Bison) — small outline pill next to the
