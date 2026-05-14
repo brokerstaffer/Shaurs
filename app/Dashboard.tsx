@@ -44,11 +44,6 @@ interface PopupCampaign {
   source: CampaignSource;
 }
 
-function statusChangeDate(iso: string | null | undefined): string {
-  if (!iso) return 'date unknown';
-  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
 interface ModalState {
   open: boolean;
   editingId: string | null;
@@ -606,10 +601,6 @@ function CampaignRow({ c }: { c: PopupCampaign }) {
         : c.status === 'running'
           ? 'Running'
           : 'Draft';
-  const dateText =
-    c.status === 'paused' || c.status === 'finished'
-      ? statusChangeDate(c.status_changed_at)
-      : null;
   return (
     <div className={`camps-popup-row ${rowCls}`}>
       <div className="camp-row-head">
@@ -628,7 +619,6 @@ function CampaignRow({ c }: { c: PopupCampaign }) {
         <span className="camp-status-chip">
           <span className="chip-dot" />
           <span className="chip-label">{statusLabel}</span>
-          {dateText && <span className="chip-date">· {dateText}</span>}
         </span>
       </div>
     </div>
