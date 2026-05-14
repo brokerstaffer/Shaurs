@@ -57,11 +57,14 @@ function backfillWindow(): { mondayKeys: string[]; rangeStart: string; rangeEnd:
   return { mondayKeys, rangeStart, rangeEnd };
 }
 
-// Decide the new status_changed_at value for a campaign:
-//   - status unchanged → preserve existing value (return undefined → skip update)
-//   - status changed AND we have a previous row → set to now() (real transition)
-//   - status changed AND no previous row (first sync) → seed with the API's
-//     own updated_at when current status is paused/finished; null for running
+// Decide the new status_changed_at value for a campaign. Returns undefined to
+// mean "leave the existing DB value alone" (no field in the upsert payload).
+//
+//   1. Real transition observed (prev status differs from new) → now()
+//   2. Status is paused/finished AND no stamp on file yet → seed from the
+//      vendor's updated_at. Covers both "first time we see this campaign" AND
+//      "existing row from before the migration added status_changed_at".
+//   3. Otherwise → undefined (preserve current value).
 function deriveStatusChangedAt(
   newStatus: 'running' | 'paused' | 'finished' | null,
   prevStatus: string | null | undefined,
@@ -70,16 +73,12 @@ function deriveStatusChangedAt(
 ): string | null | undefined {
   const prev = prevStatus ?? null;
   const next = newStatus ?? null;
-  if (prev === next) return prevStatusChangedAt ?? undefined; // unchanged → leave alone
-  if (prevStatus === undefined) {
-    // First time we see this campaign — seed from API timestamp if non-running.
-    if (next === 'paused' || next === 'finished') {
-      return apiUpdatedAt ?? new Date().toISOString();
-    }
-    return null;
+  const isTransition = prevStatus !== undefined && prev !== next;
+  if (isTransition) return new Date().toISOString();
+  if ((next === 'paused' || next === 'finished') && !prevStatusChangedAt) {
+    return apiUpdatedAt ?? new Date().toISOString();
   }
-  // Real transition observed in our DB → stamp now.
-  return new Date().toISOString();
+  return undefined;
 }
 
 async function runInstantly(): Promise<SyncResult['instantly']> {

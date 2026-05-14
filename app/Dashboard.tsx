@@ -84,6 +84,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [currentMonday, setCurrentMonday] = useState<Date>(() => getMondayOf(new Date()));
   const [filter, setFilter] = useState<Filter>('all');
   const [sortByLeft, setSortByLeft] = useState(false);
+  // 'campaigns' = sort by # active campaigns desc, total campaigns as tiebreaker.
+  // null = default order (name asc, server-provided).
+  const [sortByClient, setSortByClient] = useState<null | 'campaigns'>(null);
   const [campaignSelections, setCampaignSelections] = useState<Record<string, string>>({});
   const [campaignsPopupClientId, setCampaignsPopupClientId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -134,9 +137,22 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     });
     if (sortByLeft) {
       list = [...list].sort((a, b) => derive(b, key).leftThisWeek - derive(a, key).leftThisWeek);
+    } else if (sortByClient === 'campaigns') {
+      const score = (c: DashboardClient) => {
+        const all = [...c.campaigns, ...c.bisonCampaigns];
+        const active = all.filter((x) => x.status === 'running').length;
+        return { active, total: all.length };
+      };
+      list = [...list].sort((a, b) => {
+        const sa = score(a);
+        const sb = score(b);
+        if (sb.active !== sa.active) return sb.active - sa.active;
+        if (sb.total !== sa.total) return sb.total - sa.total;
+        return a.name.localeCompare(b.name);
+      });
     }
     return list;
-  }, [clients, filter, sortByLeft, key]);
+  }, [clients, filter, sortByLeft, sortByClient, key]);
 
   const summary = useMemo(() => {
     let total = 0;
@@ -396,13 +412,25 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <table>
                 <thead>
                   <tr>
-                    <th>Client</th>
+                    <th
+                      className={'sortable' + (sortByClient === 'campaigns' ? ' sorted' : '')}
+                      onClick={() => {
+                        setSortByClient((v) => (v === 'campaigns' ? null : 'campaigns'));
+                        setSortByLeft(false);
+                      }}
+                      title="Sort by # of active campaigns"
+                    >
+                      Client <em className="sort-icon">{sortByClient === 'campaigns' ? '↓' : '↕'}</em>
+                    </th>
                     <th>Emails Sent</th>
                     <th>Intros This Week</th>
                     <th>Conv. Rate</th>
                     <th
                       className={'sortable' + (sortByLeft ? ' sorted' : '')}
-                      onClick={() => setSortByLeft((v) => !v)}
+                      onClick={() => {
+                        setSortByLeft((v) => !v);
+                        setSortByClient(null);
+                      }}
                     >
                       Left This Week <em className="sort-icon">{sortByLeft ? '↓' : '↕'}</em>
                     </th>
