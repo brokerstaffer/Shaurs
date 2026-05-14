@@ -15,17 +15,38 @@ import {
   PLAN_BADGE_CLASS,
   PLAN_DEFAULT_TARGET,
   PLAN_LABEL,
+  type BisonCampaign,
+  type CampaignSource,
   type DashboardClient,
   type InstantlyCampaign,
   type Plan,
 } from '@/lib/types';
 
-type Filter = 'all' | 'risk' | 'ok';
+type Filter = 'all' | 'risk' | 'ok' | 'active-camp' | 'no-active-camp';
 
 interface Props {
   initialClients: DashboardClient[];
   allInstantlyCampaigns: InstantlyCampaign[];
+  allBisonCampaigns: BisonCampaign[];
   dataSource?: 'supabase' | 'seed';
+}
+
+// Used only for popup rendering — annotates which source a campaign came from
+// so we can show a chip and key React lists across the union without collisions.
+interface PopupCampaign {
+  id: string;
+  name: string;
+  status: 'running' | 'paused' | 'finished' | null;
+  emails_sent_total: number;
+  campaign_size: number;
+  progress_pct: number;
+  status_changed_at?: string | null;
+  source: CampaignSource;
+}
+
+function statusChangeDate(iso: string | null | undefined): string {
+  if (!iso) return 'date unknown';
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 interface ModalState {
@@ -57,7 +78,7 @@ function todayLocalISO(): string {
   return `${y}-${m}-${day}`;
 }
 
-export default function Dashboard({ initialClients, allInstantlyCampaigns, dataSource }: Props) {
+export default function Dashboard({ initialClients, allInstantlyCampaigns, allBisonCampaigns, dataSource }: Props) {
   const router = useRouter();
   const [clients, setClients] = useState<DashboardClient[]>(initialClients);
   const [currentMonday, setCurrentMonday] = useState<Date>(() => getMondayOf(new Date()));
@@ -97,6 +118,18 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
       if (filter === 'all') return true;
       if (filter === 'risk') return d.status === 'risk';
       if (filter === 'ok') return d.status === 'ok';
+      if (filter === 'active-camp') {
+        return (
+          c.campaigns.some((x) => x.status === 'running') ||
+          c.bisonCampaigns.some((x) => x.status === 'running')
+        );
+      }
+      if (filter === 'no-active-camp') {
+        return (
+          !c.campaigns.some((x) => x.status === 'running') &&
+          !c.bisonCampaigns.some((x) => x.status === 'running')
+        );
+      }
       return true;
     });
     if (sortByLeft) {
@@ -168,15 +201,18 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
   async function saveClient() {
     const name = modal.name.trim();
     if (!name) return;
-    // Auto-link any Instantly campaign whose name contains this client name
-    // (whole-name match + MANUAL_LINKS overrides). Same rule as the seed script.
+    // Auto-link any Instantly OR Bison campaign whose name contains this
+    // client name (whole-name match + MANUAL_LINKS overrides). Same rule as
+    // the seed script + auto-relink step in the sync worker.
     const linkedIds = autoMatchCampaignIds(name, allInstantlyCampaigns);
+    const linkedBisonIds = autoMatchCampaignIds(name, allBisonCampaigns);
     const payload = {
       name,
       plan: modal.plan,
       weekly_target: modal.weeklyTarget,
       start_date: modal.startDate || null,
       instantly_campaign_ids: linkedIds,
+      bison_campaign_ids: linkedBisonIds,
     };
     try {
       if (modal.editingId) {
@@ -205,6 +241,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
             id: client.id,
             campaign_size: 0,
             campaigns: [],
+            bisonCampaigns: [],
             metricsByWeek: {},
           },
         ]);
@@ -221,9 +258,10 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
 
   async function deleteClient(id: string) {
     const client = clients.find((c) => c.id === id);
-    const linkedCount = client?.instantly_campaign_ids.length ?? 0;
+    const linkedCount =
+      (client?.instantly_campaign_ids.length ?? 0) + (client?.bison_campaign_ids.length ?? 0);
     const detail = linkedCount > 0
-      ? `Removing this client will also delete their weekly metrics and ${linkedCount} linked Instantly campaign cache row${linkedCount === 1 ? '' : 's'} (campaigns linked to no other client). Continue?`
+      ? `Removing this client will also delete their weekly metrics and ${linkedCount} linked campaign cache row${linkedCount === 1 ? '' : 's'} (campaigns linked to no other client). Continue?`
       : `Remove this client? Their weekly metrics will also be deleted from Supabase.`;
     if (!confirm(detail)) return;
     try {
@@ -272,9 +310,10 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
   // Preview the campaigns that will be auto-linked when saving. Updates live
   // as the user types so they can see what will happen.
   const previewLinkedCount = useMemo(() => {
-    const ids = autoMatchCampaignIds(modal.name, allInstantlyCampaigns);
-    return ids.length;
-  }, [modal.name, allInstantlyCampaigns]);
+    const i = autoMatchCampaignIds(modal.name, allInstantlyCampaigns).length;
+    const b = autoMatchCampaignIds(modal.name, allBisonCampaigns).length;
+    return i + b;
+  }, [modal.name, allInstantlyCampaigns, allBisonCampaigns]);
 
   return (
     <>
@@ -334,13 +373,15 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
             <div>
               <div className="table-title">Client Health</div>
               <div className="table-subtitle">
-                {isCurrent ? 'Live data from Instantly · MasterInbox' : `Week of ${formatWeek(currentMonday)}`}
+                {isCurrent ? 'Live data from Instantly · Bison · MasterInbox' : `Week of ${formatWeek(currentMonday)}`}
               </div>
             </div>
             <div className="filter-pills">
               <button className={'fpill' + (filter === 'all' ? ' active' : '')} onClick={() => setFilter('all')}>All</button>
               <button className={'fpill f-risk' + (filter === 'risk' ? ' active' : '')} onClick={() => setFilter('risk')}>At Risk</button>
               <button className={'fpill f-ok' + (filter === 'ok' ? ' active' : '')} onClick={() => setFilter('ok')}>On Track</button>
+              <button className={'fpill' + (filter === 'active-camp' ? ' active' : '')} onClick={() => setFilter('active-camp')}>Active Campaign</button>
+              <button className={'fpill' + (filter === 'no-active-camp' ? ' active' : '')} onClick={() => setFilter('no-active-camp')}>No Active</button>
             </div>
           </div>
           <div className="table-scroll">
@@ -365,7 +406,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
                     >
                       Left This Week <em className="sort-icon">{sortByLeft ? '↓' : '↕'}</em>
                     </th>
-                    <th>Campaign (Instantly)</th>
+                    <th>Campaign Progress</th>
                     <th>Last Intro</th>
                     <th>Status</th>
                     <th>Plan</th>
@@ -414,10 +455,10 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, dataS
             />
             <div className="form-help">
               {modal.name.trim() === ''
-                ? 'Instantly campaigns whose name contains this client name are auto-linked on save.'
+                ? 'Instantly + Bison campaigns whose name contains this client name are auto-linked on save.'
                 : previewLinkedCount === 0
-                  ? `No Instantly campaign contains "${modal.name.trim()}" — this client will be saved without any linked campaigns.`
-                  : `Will auto-link ${previewLinkedCount} matching Instantly campaign${previewLinkedCount === 1 ? '' : 's'}.`}
+                  ? `No campaign contains "${modal.name.trim()}" — this client will be saved without any linked campaigns.`
+                  : `Will auto-link ${previewLinkedCount} matching campaign${previewLinkedCount === 1 ? '' : 's'}.`}
             </div>
           </div>
 
@@ -507,11 +548,27 @@ function CampaignsPopup({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // Only active campaigns are surfaced in the dashboard.
-  const camps = client.campaigns.filter((c) => c.status === 'running');
-  const totalSent = camps.reduce((a, b) => a + b.emails_sent_total, 0);
+  // Surface ALL linked campaigns across both sources, grouped by status.
+  // Running first, then paused (most recent first), then finished.
+  const all: PopupCampaign[] = [
+    ...client.campaigns.map((c) => ({ ...c, source: 'instantly' as const })),
+    ...client.bisonCampaigns.map((c) => ({ ...c, source: 'bison' as const })),
+  ];
+  const statusRank = (s: PopupCampaign['status']): number =>
+    s === 'running' ? 0 : s === 'paused' ? 1 : s === 'finished' ? 2 : 3;
+  const sorted = [...all].sort((a, b) => {
+    const r = statusRank(a.status) - statusRank(b.status);
+    if (r !== 0) return r;
+    // Within paused/finished, most recent transition first.
+    const at = a.status_changed_at ? Date.parse(a.status_changed_at) : 0;
+    const bt = b.status_changed_at ? Date.parse(b.status_changed_at) : 0;
+    return bt - at;
+  });
+
+  const running = sorted.filter((c) => c.status === 'running');
+  const totalSent = running.reduce((a, b) => a + b.emails_sent_total, 0);
   const summary =
-    camps.length === 0
+    running.length === 0
       ? 'No active campaigns'
       : `${totalSent.toLocaleString()} emails sent`;
 
@@ -526,32 +583,62 @@ function CampaignsPopup({
         <div className="camps-popup-header">
           <div className="camps-popup-title">{client.name}</div>
           <div className="camps-popup-sub">
-            {camps.length} active {camps.length === 1 ? 'campaign' : 'campaigns'}
-            {camps.length > 0 ? ` · ${summary}` : ''}
+            {running.length} active {running.length === 1 ? 'campaign' : 'campaigns'}
+            {running.length > 0 ? ` · ${summary}` : ''}
+            {sorted.length > running.length && ` · ${sorted.length - running.length} paused / completed`}
           </div>
-          {camps.length > 0 && (
+          {sorted.length > 0 && (
             <div className="camps-popup-note">
-              Email counts include every sequence step + subsequences. Matches Instantly&apos;s campaign total, not its Step Analytics view.
+              Email counts include every sequence step + subsequences. Matches each vendor&apos;s campaign total, not its Step Analytics view.
             </div>
           )}
         </div>
         <div className="camps-popup-body">
-          {camps.length === 0 ? (
+          {sorted.length === 0 ? (
             <div className="empty-state" style={{ padding: '40px 20px' }}>
               <div className="empty-icon">⏸</div>
-              <h3>No active campaigns</h3>
-              <p>This client has no running campaigns right now.</p>
+              <h3>No campaigns linked</h3>
+              <p>This client has no linked campaigns yet.</p>
             </div>
           ) : (
-            camps.map((c) => {
+            sorted.map((c) => {
               const pct = Math.min(100, Math.max(0, Number(c.progress_pct ?? 0)));
               const sent = c.emails_sent_total?.toLocaleString() ?? '0';
               const total = c.campaign_size ?? 0;
               const completed = Math.round(total * (pct / 100));
+              const sourceLabel = c.source === 'bison' ? 'Bison' : 'Instantly';
+              const rowCls =
+                c.status === 'running'
+                  ? 'is-running'
+                  : c.status === 'paused'
+                    ? 'is-paused'
+                    : c.status === 'finished'
+                      ? 'is-finished'
+                      : '';
+              const chip =
+                c.status === 'paused' ? (
+                  <span className="camp-status-chip camp-status-paused">
+                    <span className="chip-dot" />
+                    Paused since {statusChangeDate(c.status_changed_at)}
+                  </span>
+                ) : c.status === 'finished' ? (
+                  <span className="camp-status-chip camp-status-finished">
+                    <span className="chip-dot" />
+                    Completed {statusChangeDate(c.status_changed_at)}
+                  </span>
+                ) : (
+                  <span className="camp-status-chip">
+                    <span className="chip-dot" />
+                    Running
+                  </span>
+                );
               return (
-                <div key={c.id} className="camps-popup-row is-running">
+                <div key={`${c.source}:${c.id}`} className={`camps-popup-row ${rowCls}`}>
                   <div className="camp-row-head">
-                    <div className="camp-info-name">{c.name}</div>
+                    <div className="camp-info-name">
+                      {c.name}
+                      <span className={`camp-source-chip cs-${c.source}`}>{sourceLabel}</span>
+                    </div>
                     <div className="camp-pct">{Math.round(pct)}%</div>
                   </div>
                   <div className="camp-mini-bar">
@@ -563,10 +650,7 @@ function CampaignsPopup({
                       <span style={{ margin: '0 6px', opacity: 0.4 }}>·</span>
                       <strong>{sent}</strong> emails sent
                     </span>
-                    <span className="camp-status-chip">
-                      <span className="chip-dot" />
-                      Running
-                    </span>
+                    {chip}
                   </div>
                 </div>
               );
@@ -623,8 +707,11 @@ function ClientRow({
   const d = derive(client, wk);
   // Per spec, the dashboard only reflects ACTIVE (running) campaigns:
   // count, dropdown options, and the "all campaigns (avg)" rollup all
-  // exclude paused/finished campaigns.
-  const activeCampaigns = client.campaigns.filter((c) => c.status === 'running');
+  // exclude paused/finished campaigns. Union across Instantly + Bison sources.
+  const activeCampaigns: (InstantlyCampaign | BisonCampaign)[] = [
+    ...client.campaigns.filter((c) => c.status === 'running'),
+    ...client.bisonCampaigns.filter((c) => c.status === 'running'),
+  ];
 
   // emails cell
   const emailsCell = d.emails > 0 ? (

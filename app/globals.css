@@ -193,6 +193,26 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 }
 .camps-popup-row.is-running .camp-status-chip .chip-dot { animation: blink 1.4s infinite; }
 
+/* Vendor source chip (Instantly / Bison) — small outline pill next to the
+   campaign name so the user can tell which platform during the dual-source
+   phase. */
+.camp-source-chip {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  background: var(--bg);
+}
+.camp-source-chip.cs-instantly { color: #6B5BD3; border-color: #C5BCF2; background: #EEEAFD; }
+.camp-source-chip.cs-bison     { color: #0F766E; border-color: #99F6E4; background: #ECFEFB; }
+
 .camps-popup-footer {
   padding: 14px 20px 18px;
   display: flex; justify-content: flex-end;

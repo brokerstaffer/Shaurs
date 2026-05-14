@@ -4,7 +4,7 @@ import { loadDashboardClients } from '@/lib/loadDashboard';
 export const dynamic = 'force-dynamic';
 
 export default async function Page() {
-  const { clients, allInstantlyCampaigns, source, error } = await loadDashboardClients();
+  const { clients, allInstantlyCampaigns, allBisonCampaigns, source, error } = await loadDashboardClients();
   if (error) {
     console.warn(`[dashboard] Falling back to ${source}:`, error);
   }
@@ -12,6 +12,7 @@ export default async function Page() {
     <Dashboard
       initialClients={clients}
       allInstantlyCampaigns={allInstantlyCampaigns}
+      allBisonCampaigns={allBisonCampaigns}
       dataSource={source}
     />
   );

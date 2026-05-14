@@ -2,6 +2,8 @@ export type Plan = 'minimum' | 'production' | 'partner';
 
 export type CampaignStatus = 'running' | 'paused' | 'finished';
 
+export type CampaignSource = 'instantly' | 'bison';
+
 export interface InstantlyCampaign {
   id: string;
   name: string;
@@ -9,6 +11,17 @@ export interface InstantlyCampaign {
   emails_sent_total: number;
   campaign_size: number;
   progress_pct: number; // 0-100
+  status_changed_at?: string | null;
+}
+
+export interface BisonCampaign {
+  id: string;
+  name: string;
+  status: CampaignStatus | null;
+  emails_sent_total: number;
+  campaign_size: number;
+  progress_pct: number; // 0-100
+  status_changed_at?: string | null;
 }
 
 export interface Client {
@@ -18,6 +31,7 @@ export interface Client {
   weekly_target: number;
   start_date: string | null; // ISO date
   instantly_campaign_ids: string[];
+  bison_campaign_ids: string[];
   campaign_size: number;
 }
 
@@ -31,6 +45,7 @@ export interface WeeklyMetric {
 
 export interface DashboardClient extends Client {
   campaigns: InstantlyCampaign[];
+  bisonCampaigns: BisonCampaign[];
   // All weekly metrics this client has, keyed by ISO Monday (YYYY-MM-DD).
   // Lookup for the current visible week is O(1) — no DB hit on week change.
   metricsByWeek: Record<string, WeeklyMetric>;

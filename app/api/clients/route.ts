@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
       weekly_target: body.weekly_target,
       start_date: body.start_date ?? null,
       instantly_campaign_ids: body.instantly_campaign_ids ?? [],
+      bison_campaign_ids: body.bison_campaign_ids ?? [],
       campaign_size: body.campaign_size ?? 0,
     })
     .select()
@@ -34,15 +35,19 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json();
   if (!body.id) return NextResponse.json({ error: 'id required' }, { status: 400 });
   const sb = getSupabase();
+  const update: Record<string, unknown> = {
+    name: body.name,
+    plan: body.plan,
+    weekly_target: body.weekly_target,
+    start_date: body.start_date,
+    instantly_campaign_ids: body.instantly_campaign_ids,
+  };
+  // Only include bison_campaign_ids if the caller sent it — keeps older
+  // clients from accidentally clearing the array via PATCH.
+  if (body.bison_campaign_ids !== undefined) update.bison_campaign_ids = body.bison_campaign_ids;
   const { data, error } = await sb
     .from('clients')
-    .update({
-      name: body.name,
-      plan: body.plan,
-      weekly_target: body.weekly_target,
-      start_date: body.start_date,
-      instantly_campaign_ids: body.instantly_campaign_ids,
-    })
+    .update(update)
     .eq('id', body.id)
     .select()
     .single();
@@ -56,26 +61,28 @@ export async function DELETE(req: NextRequest) {
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
   const sb = getSupabase();
 
-  // 1. Read the client's linked campaign IDs so we can clean up orphans afterwards.
+  // 1. Read the client's linked campaign IDs (both sources) so we can clean
+  //    up orphans afterwards.
   const { data: clientRow, error: readErr } = await sb
     .from('clients')
-    .select('instantly_campaign_ids')
+    .select('instantly_campaign_ids, bison_campaign_ids')
     .eq('id', id)
     .single();
   if (readErr) return NextResponse.json({ error: readErr.message }, { status: 400 });
-  const linkedCampaignIds: string[] = clientRow?.instantly_campaign_ids ?? [];
+  const linkedInstantlyIds: string[] = clientRow?.instantly_campaign_ids ?? [];
+  const linkedBisonIds: string[] = clientRow?.bison_campaign_ids ?? [];
 
   // 2. Delete the client. weekly_metrics rows cascade automatically
   //    (FK on weekly_metrics.client_id is ON DELETE CASCADE).
   const { error: delErr } = await sb.from('clients').delete().eq('id', id);
   if (delErr) return NextResponse.json({ error: delErr.message }, { status: 400 });
 
-  // 3. For each previously linked campaign, drop it from instantly_campaigns
-  //    if no OTHER client still references it. The next sync will re-add it
-  //    if it still exists in Instantly — but until then the row is gone, so
+  // 3. For each previously linked campaign, drop it from its source table if
+  //    no OTHER client still references it. The next sync will re-add it
+  //    if it still exists in the vendor — but until then the row is gone, so
   //    re-adding the same client doesn't show stale campaign data.
   let orphansRemoved = 0;
-  for (const campaignId of linkedCampaignIds) {
+  for (const campaignId of linkedInstantlyIds) {
     const { data: stillLinked, error: lookupErr } = await sb
       .from('clients')
       .select('id')
@@ -85,6 +92,21 @@ export async function DELETE(req: NextRequest) {
     if (!stillLinked || stillLinked.length === 0) {
       const { error: campDelErr } = await sb
         .from('instantly_campaigns')
+        .delete()
+        .eq('id', campaignId);
+      if (!campDelErr) orphansRemoved++;
+    }
+  }
+  for (const campaignId of linkedBisonIds) {
+    const { data: stillLinked, error: lookupErr } = await sb
+      .from('clients')
+      .select('id')
+      .contains('bison_campaign_ids', [campaignId])
+      .limit(1);
+    if (lookupErr) continue;
+    if (!stillLinked || stillLinked.length === 0) {
+      const { error: campDelErr } = await sb
+        .from('bison_campaigns')
         .delete()
         .eq('id', campaignId);
       if (!campDelErr) orphansRemoved++;

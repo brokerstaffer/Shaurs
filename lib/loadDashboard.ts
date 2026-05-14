@@ -5,6 +5,7 @@ import { getSupabase } from './supabase';
 import { generateSeed } from './seed';
 import {
   HISTORICAL_WEEKS,
+  type BisonCampaign,
   type DashboardClient,
   type InstantlyCampaign,
   type Plan,
@@ -19,12 +20,14 @@ interface ClientRow {
   weekly_target: number;
   start_date: string | null;
   instantly_campaign_ids: string[];
+  bison_campaign_ids: string[];
   campaign_size: number;
 }
 
 export async function loadDashboardClients(): Promise<{
   clients: DashboardClient[];
   allInstantlyCampaigns: InstantlyCampaign[];
+  allBisonCampaigns: BisonCampaign[];
   source: 'supabase' | 'seed';
   error?: string;
 }> {
@@ -35,6 +38,7 @@ export async function loadDashboardClients(): Promise<{
     return {
       clients: generateSeed(),
       allInstantlyCampaigns: [],
+      allBisonCampaigns: [],
       source: 'seed',
       error: (err as Error).message,
     };
@@ -43,24 +47,29 @@ export async function loadDashboardClients(): Promise<{
   // Sliding window: this Monday minus N-1 weeks.
   const earliestMonday = weekKey(addDays(getMondayOf(new Date()), -7 * (HISTORICAL_WEEKS - 1)));
 
-  const [clientsRes, metricsRes, campaignsRes] = await Promise.all([
+  const [clientsRes, metricsRes, campaignsRes, bisonRes] = await Promise.all([
     sb.from('clients').select('*').order('name'),
     sb.from('weekly_metrics').select('*').gte('week_key', earliestMonday),
     sb.from('instantly_campaigns').select('*'),
+    sb.from('bison_campaigns').select('*'),
   ]);
 
   if (clientsRes.error) {
     return {
       clients: generateSeed(),
       allInstantlyCampaigns: [],
+      allBisonCampaigns: [],
       source: 'seed',
       error: clientsRes.error.message,
     };
   }
 
   const allInstantlyCampaigns = (campaignsRes.data ?? []) as InstantlyCampaign[];
+  const allBisonCampaigns = (bisonRes.data ?? []) as BisonCampaign[];
   const clients = (clientsRes.data ?? []) as ClientRow[];
-  if (clients.length === 0) return { clients: [], allInstantlyCampaigns, source: 'supabase' };
+  if (clients.length === 0) {
+    return { clients: [], allInstantlyCampaigns, allBisonCampaigns, source: 'supabase' };
+  }
 
   const metricsByClient = new Map<string, Record<string, WeeklyMetric>>();
   for (const m of (metricsRes.data ?? []) as WeeklyMetric[]) {
@@ -73,13 +82,19 @@ export async function loadDashboardClients(): Promise<{
   }
 
   const campaignsById = new Map<string, InstantlyCampaign>(
-    ((campaignsRes.data ?? []) as InstantlyCampaign[]).map((c) => [c.id, c])
+    allInstantlyCampaigns.map((c) => [c.id, c])
+  );
+  const bisonById = new Map<string, BisonCampaign>(
+    allBisonCampaigns.map((c) => [c.id, c])
   );
 
   const dashboardClients: DashboardClient[] = clients.map((c) => {
     const linkedCampaigns = (c.instantly_campaign_ids ?? [])
       .map((id) => campaignsById.get(id))
       .filter((x): x is InstantlyCampaign => Boolean(x));
+    const linkedBison = (c.bison_campaign_ids ?? [])
+      .map((id) => bisonById.get(id))
+      .filter((x): x is BisonCampaign => Boolean(x));
 
     return {
       id: c.id,
@@ -88,11 +103,13 @@ export async function loadDashboardClients(): Promise<{
       weekly_target: c.weekly_target,
       start_date: c.start_date,
       instantly_campaign_ids: c.instantly_campaign_ids ?? [],
+      bison_campaign_ids: c.bison_campaign_ids ?? [],
       campaign_size: c.campaign_size ?? 0,
       campaigns: linkedCampaigns,
+      bisonCampaigns: linkedBison,
       metricsByWeek: metricsByClient.get(c.id) ?? {},
     };
   });
 
-  return { clients: dashboardClients, allInstantlyCampaigns, source: 'supabase' };
+  return { clients: dashboardClients, allInstantlyCampaigns, allBisonCampaigns, source: 'supabase' };
 }
