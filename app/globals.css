@@ -212,25 +212,34 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 .camps-popup-row.is-finished .camp-status-chip { color: var(--text-muted); }
 .camps-popup-row.is-running .camp-status-chip .chip-dot { animation: blink 1.4s infinite; }
 
-/* Vendor source chip (Instantly / Bison) — small outline pill next to the
-   campaign name so the user can tell which platform during the dual-source
-   phase. */
-.camp-source-chip {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  vertical-align: middle;
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  background: var(--bg);
+/* Stats line — keep on one line so the campaign name doesn't sit next to
+   wrapped "leads · X emails sent" text. */
+.camps-popup-row .camp-row-stats {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.camp-source-chip.cs-instantly { color: #6B5BD3; border-color: #C5BCF2; background: #EEEAFD; }
-.camp-source-chip.cs-bison     { color: #0F766E; border-color: #99F6E4; background: #ECFEFB; }
+.camps-popup-row .camp-row-sep { margin: 0 6px; opacity: 0.4; }
+
+/* Vendor section header — subtle, only renders when a client has campaigns
+   in BOTH Instantly and Bison. */
+.camps-popup-group + .camps-popup-group { margin-top: 16px; }
+.camps-popup-group-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 2px 8px;
+  font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--text-muted);
+}
+.camps-popup-group-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; padding: 0 5px; height: 16px;
+  border-radius: 999px;
+  background: var(--bg); color: var(--text-muted);
+  font-size: 10px; font-weight: 700;
+  border: 1px solid var(--border);
+}
 
 .camps-popup-footer {
   padding: 14px 20px 18px;

@@ -561,6 +561,80 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   );
 }
 
+function CampaignGroup({
+  label,
+  count,
+  campaigns,
+}: {
+  label: string | null;
+  count: number;
+  campaigns: PopupCampaign[];
+}) {
+  return (
+    <div className="camps-popup-group">
+      {label && (
+        <div className="camps-popup-group-header">
+          <span className="camps-popup-group-label">{label}</span>
+          <span className="camps-popup-group-count">{count}</span>
+        </div>
+      )}
+      {campaigns.map((c) => (
+        <CampaignRow key={`${c.source}:${c.id}`} c={c} />
+      ))}
+    </div>
+  );
+}
+
+function CampaignRow({ c }: { c: PopupCampaign }) {
+  const pct = Math.min(100, Math.max(0, Number(c.progress_pct ?? 0)));
+  const sent = c.emails_sent_total?.toLocaleString() ?? '0';
+  const total = c.campaign_size ?? 0;
+  const completed = Math.round(total * (pct / 100));
+  const rowCls =
+    c.status === 'running'
+      ? 'is-running'
+      : c.status === 'paused'
+        ? 'is-paused'
+        : c.status === 'finished'
+          ? 'is-finished'
+          : 'is-draft';
+  const statusLabel =
+    c.status === 'paused'
+      ? 'Paused'
+      : c.status === 'finished'
+        ? 'Finished'
+        : c.status === 'running'
+          ? 'Running'
+          : 'Draft';
+  const dateText =
+    c.status === 'paused' || c.status === 'finished'
+      ? statusChangeDate(c.status_changed_at)
+      : null;
+  return (
+    <div className={`camps-popup-row ${rowCls}`}>
+      <div className="camp-row-head">
+        <div className="camp-info-name">{c.name}</div>
+        <div className="camp-pct">{Math.round(pct)}%</div>
+      </div>
+      <div className="camp-mini-bar">
+        <span style={{ width: `${pct}%` }} />
+      </div>
+      <div className="camp-row-foot">
+        <span className="camp-row-stats">
+          <strong>{completed.toLocaleString()}</strong> / {total.toLocaleString()} leads
+          <span className="camp-row-sep">·</span>
+          <strong>{sent}</strong> emails sent
+        </span>
+        <span className="camp-status-chip">
+          <span className="chip-dot" />
+          <span className="chip-label">{statusLabel}</span>
+          {dateText && <span className="chip-date">· {dateText}</span>}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function CampaignsPopup({
   client,
   onClose,
@@ -576,24 +650,33 @@ function CampaignsPopup({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // Surface ALL linked campaigns across both sources, grouped by status.
-  // Running first, then paused (most recent first), then finished.
-  const all: PopupCampaign[] = [
-    ...client.campaigns.map((c) => ({ ...c, source: 'instantly' as const })),
-    ...client.bisonCampaigns.map((c) => ({ ...c, source: 'bison' as const })),
-  ];
+  // Surface ALL linked campaigns across both sources. Group by vendor so the
+  // popup reads as two clean lists (Instantly first, then Bison) instead of an
+  // interleaved one. Within each group, sort by status: running → paused →
+  // finished, then most-recent transition first.
   const statusRank = (s: PopupCampaign['status']): number =>
     s === 'running' ? 0 : s === 'paused' ? 1 : s === 'finished' ? 2 : 3;
-  const sorted = [...all].sort((a, b) => {
-    const r = statusRank(a.status) - statusRank(b.status);
-    if (r !== 0) return r;
-    // Within paused/finished, most recent transition first.
-    const at = a.status_changed_at ? Date.parse(a.status_changed_at) : 0;
-    const bt = b.status_changed_at ? Date.parse(b.status_changed_at) : 0;
-    return bt - at;
-  });
+  const sortGroup = (group: PopupCampaign[]) =>
+    [...group].sort((a, b) => {
+      const r = statusRank(a.status) - statusRank(b.status);
+      if (r !== 0) return r;
+      const at = a.status_changed_at ? Date.parse(a.status_changed_at) : 0;
+      const bt = b.status_changed_at ? Date.parse(b.status_changed_at) : 0;
+      return bt - at;
+    });
+  const instantlyGroup = sortGroup(
+    client.campaigns.map((c) => ({ ...c, source: 'instantly' as const }))
+  );
+  const bisonGroup = sortGroup(
+    client.bisonCampaigns.map((c) => ({ ...c, source: 'bison' as const }))
+  );
+  const all: PopupCampaign[] = [...instantlyGroup, ...bisonGroup];
 
-  const running = sorted.filter((c) => c.status === 'running');
+  // Only render section headers when BOTH sources have campaigns. If only one
+  // is linked, the headers would be visual noise.
+  const showHeaders = instantlyGroup.length > 0 && bisonGroup.length > 0;
+
+  const running = all.filter((c) => c.status === 'running');
   const totalSent = running.reduce((a, b) => a + b.emails_sent_total, 0);
   const summary =
     running.length === 0
@@ -613,83 +696,38 @@ function CampaignsPopup({
           <div className="camps-popup-sub">
             {running.length} active {running.length === 1 ? 'campaign' : 'campaigns'}
             {running.length > 0 ? ` · ${summary}` : ''}
-            {sorted.length > running.length && ` · ${sorted.length - running.length} paused / finished`}
+            {all.length > running.length && ` · ${all.length - running.length} paused / finished`}
           </div>
-          {sorted.length > 0 && (
+          {all.length > 0 && (
             <div className="camps-popup-note">
               Email counts include every sequence step + subsequences. Matches each vendor&apos;s campaign total, not its Step Analytics view.
             </div>
           )}
         </div>
         <div className="camps-popup-body">
-          {sorted.length === 0 ? (
+          {all.length === 0 ? (
             <div className="empty-state" style={{ padding: '40px 20px' }}>
               <div className="empty-icon">⏸</div>
               <h3>No campaigns linked</h3>
               <p>This client has no linked campaigns yet.</p>
             </div>
           ) : (
-            sorted.map((c) => {
-              const pct = Math.min(100, Math.max(0, Number(c.progress_pct ?? 0)));
-              const sent = c.emails_sent_total?.toLocaleString() ?? '0';
-              const total = c.campaign_size ?? 0;
-              const completed = Math.round(total * (pct / 100));
-              const sourceLabel = c.source === 'bison' ? 'Bison' : 'Instantly';
-              const rowCls =
-                c.status === 'running'
-                  ? 'is-running'
-                  : c.status === 'paused'
-                    ? 'is-paused'
-                    : c.status === 'finished'
-                      ? 'is-finished'
-                      : '';
-              // "Finished" instead of "Completed" — Instantly marks a campaign
-              // status=3 once it has exhausted its lead list, regardless of how
-              // many leads bounced/skipped. So progress % can be < 100 even when
-              // the campaign is officially done. "Finished" reads as end-of-life,
-              // not as "100% delivered" the way "Completed" did.
-              const statusLabel =
-                c.status === 'paused'
-                  ? 'Paused'
-                  : c.status === 'finished'
-                    ? 'Finished'
-                    : c.status === 'running'
-                      ? 'Running'
-                      : 'Draft';
-              const dateText =
-                c.status === 'paused' || c.status === 'finished'
-                  ? statusChangeDate(c.status_changed_at)
-                  : null;
-              const chip = (
-                <span className="camp-status-chip">
-                  <span className="chip-dot" />
-                  <span className="chip-label">{statusLabel}</span>
-                  {dateText && <span className="chip-date">· {dateText}</span>}
-                </span>
-              );
-              return (
-                <div key={`${c.source}:${c.id}`} className={`camps-popup-row ${rowCls}`}>
-                  <div className="camp-row-head">
-                    <div className="camp-info-name">
-                      {c.name}
-                      <span className={`camp-source-chip cs-${c.source}`}>{sourceLabel}</span>
-                    </div>
-                    <div className="camp-pct">{Math.round(pct)}%</div>
-                  </div>
-                  <div className="camp-mini-bar">
-                    <span style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="camp-row-foot">
-                    <span>
-                      <strong>{completed.toLocaleString()}</strong> / {total.toLocaleString()} leads
-                      <span style={{ margin: '0 6px', opacity: 0.4 }}>·</span>
-                      <strong>{sent}</strong> emails sent
-                    </span>
-                    {chip}
-                  </div>
-                </div>
-              );
-            })
+            <>
+              {instantlyGroup.length > 0 && (
+                <CampaignGroup
+                  label={showHeaders ? 'Instantly' : null}
+                  count={instantlyGroup.length}
+                  campaigns={instantlyGroup}
+                />
+              )}
+              {bisonGroup.length > 0 && (
+                <CampaignGroup
+                  label={showHeaders ? 'Bison' : null}
+                  count={bisonGroup.length}
+                  campaigns={bisonGroup}
+                />
+              )}
+            </>
           )}
         </div>
         <div className="camps-popup-footer">
