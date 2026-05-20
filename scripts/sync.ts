@@ -21,6 +21,7 @@ import {
 } from '../lib/bison';
 import { addDays, getMondayOf, weekKey } from '../lib/derive';
 import { findLabelId, listAllProspects } from '../lib/masterinbox';
+import { listCorofyIntros } from '../lib/corofy';
 import { autoMatchCampaignIds } from '../lib/matchCampaigns';
 import { HISTORICAL_WEEKS } from '../lib/types';
 
@@ -28,6 +29,7 @@ interface SyncResult {
   instantly: { ok: boolean; error?: string; campaigns?: number; weeksBackfilled?: number };
   bison: { ok: boolean; error?: string; campaigns?: number; weeksBackfilled?: number; skipped?: boolean };
   masterinbox: { ok: boolean; error?: string; intros?: number; skipped?: boolean };
+  corofy: { ok: boolean; error?: string; intros?: number; skipped?: boolean; unmatched?: string[] };
 }
 
 export async function runSync(): Promise<SyncResult> {
@@ -35,10 +37,12 @@ export async function runSync(): Promise<SyncResult> {
     instantly: { ok: false },
     bison: { ok: false },
     masterinbox: { ok: false },
+    corofy: { ok: false },
   };
   result.instantly = await runInstantly();
   result.bison = await runBison();
   result.masterinbox = await runMasterInbox();
+  result.corofy = await runCorofy();
   return result;
 }
 
@@ -474,6 +478,100 @@ async function runMasterInbox(): Promise<SyncResult['masterinbox']> {
   }
 }
 
+async function runCorofy(): Promise<SyncResult['corofy']> {
+  if (!process.env.COROFY_ADMIN_TOKEN || !process.env.COROFY_BASE_URL) {
+    return { ok: true, skipped: true };
+  }
+
+  const sb = getSupabase();
+  const { data: run } = await sb
+    .from('sync_runs')
+    .insert({ source: 'corofy' })
+    .select('id')
+    .single();
+
+  try {
+    const intros = await listCorofyIntros();
+    const { mondayKeys } = backfillWindow();
+    const validWeekSet = new Set(mondayKeys);
+
+    // Bucket by (client_name, week_key) — count + latest timestamp.
+    const byNameWeek = new Map<string, { count: number; latest: number }>();
+    const allTimeLatestByName = new Map<string, number>();
+    const seenNames = new Set<string>();
+
+    for (const i of intros) {
+      const t = new Date(i.assigned_at).getTime();
+      if (!Number.isFinite(t)) continue;
+      const nameKey = i.client_name;
+      seenNames.add(nameKey);
+      if ((allTimeLatestByName.get(nameKey) ?? 0) < t) allTimeLatestByName.set(nameKey, t);
+
+      const wk = weekKey(new Date(t));
+      if (!validWeekSet.has(wk)) continue;
+      const k = `${nameKey}|${wk}`;
+      const cur = byNameWeek.get(k) ?? { count: 0, latest: 0 };
+      cur.count++;
+      if (t > cur.latest) cur.latest = t;
+      byNameWeek.set(k, cur);
+    }
+
+    const { data: clients } = await sb.from('clients').select('id, name');
+    const matchedNames = new Set<string>();
+    if (clients) {
+      const upserts: {
+        client_id: string;
+        week_key: string;
+        intros_corofy: number;
+        last_corofy_intro_at: string | null;
+      }[] = [];
+      for (const c of clients as { id: string; name: string }[]) {
+        if (seenNames.has(c.name)) matchedNames.add(c.name);
+        const allTime = allTimeLatestByName.get(c.name) ?? 0;
+        for (const wk of mondayKeys) {
+          const stats = byNameWeek.get(`${c.name}|${wk}`);
+          const count = stats?.count ?? 0;
+          const latest = stats?.latest ?? 0;
+          const ts = latest > 0 ? latest : allTime;
+          // Always emit so weeks with no current intros are reset to 0 (otherwise
+          // a deletion on the Corofy side would never clear our cached count).
+          // Supabase upsert merges columns we don't list, so MasterInbox's
+          // intros / last_intro_at columns stay untouched.
+          upserts.push({
+            client_id: c.id,
+            week_key: wk,
+            intros_corofy: count,
+            last_corofy_intro_at: ts > 0 ? new Date(ts).toISOString() : null,
+          });
+        }
+      }
+      if (upserts.length > 0) {
+        const { error } = await sb
+          .from('weekly_metrics')
+          .upsert(upserts, { onConflict: 'client_id,week_key', ignoreDuplicates: false });
+        if (error) throw new Error(error.message);
+      }
+    }
+
+    const unmatched = [...seenNames].filter((n) => !matchedNames.has(n));
+    if (unmatched.length > 0) {
+      console.warn(
+        `[corofy] ${unmatched.length} client name(s) from Corofy did not match any clients.name: ${unmatched.join(', ')}`
+      );
+    }
+
+    await sb.from('sync_runs').update({ ok: true, finished_at: new Date().toISOString() }).eq('id', run?.id);
+    return { ok: true, intros: intros.length, unmatched: unmatched.length > 0 ? unmatched : undefined };
+  } catch (err) {
+    const message = (err as Error).message;
+    await sb
+      .from('sync_runs')
+      .update({ ok: false, error: message, finished_at: new Date().toISOString() })
+      .eq('id', run?.id);
+    return { ok: false, error: message };
+  }
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   runSync()
     .then((r) => {
@@ -481,7 +579,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const allOk =
         r.instantly.ok &&
         r.bison.ok &&
-        r.masterinbox.ok;
+        r.masterinbox.ok &&
+        r.corofy.ok;
       process.exit(allOk ? 0 : 1);
     })
     .catch((err) => {

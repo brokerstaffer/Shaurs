@@ -301,6 +301,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         result?: {
           instantly?: { campaigns?: number };
           masterinbox?: { intros?: number; skipped?: boolean };
+          corofy?: { intros?: number; skipped?: boolean };
         };
       };
       // Re-fetch the server component so newly synced data shows up immediately.
@@ -309,7 +310,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       const parts: string[] = [];
       if (r.instantly?.campaigns !== undefined) parts.push(`${r.instantly.campaigns} campaigns`);
       if (r.masterinbox?.skipped) parts.push('MasterInbox skipped');
-      else if (r.masterinbox?.intros !== undefined) parts.push(`${r.masterinbox.intros} intros`);
+      else if (r.masterinbox?.intros !== undefined) parts.push(`MI ${r.masterinbox.intros} intros`);
+      if (r.corofy?.skipped) parts.push('Corofy skipped');
+      else if (r.corofy?.intros !== undefined) parts.push(`Corofy ${r.corofy.intros} intros`);
       setToast(`Synced · ${parts.join(' · ')}`);
     } catch (err) {
       setToast(`Sync error: ${(err as Error).message}`);

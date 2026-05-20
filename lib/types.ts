@@ -39,8 +39,10 @@ export interface WeeklyMetric {
   client_id: string;
   week_key: string; // YYYY-MM-DD (Monday)
   emails_sent: number;
-  intros: number;
-  last_intro_at: string | null;
+  intros: number;                       // MasterInbox-sourced count
+  last_intro_at: string | null;         // MasterInbox-sourced timestamp
+  intros_corofy: number;                // Corofy-sourced count
+  last_corofy_intro_at: string | null;  // Corofy-sourced timestamp
 }
 
 export interface DashboardClient extends Client {
