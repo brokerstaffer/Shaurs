@@ -12,10 +12,8 @@ export function generateSeed(): DashboardClient[] {
     client_id: clientId,
     week_key: key,
     emails_sent: emails,
-    intros,
-    last_intro_at: lastIntro ?? null,
-    intros_corofy: 0,
-    last_corofy_intro_at: null,
+    intros_corofy: intros,
+    last_corofy_intro_at: lastIntro ?? null,
   });
 
   // For seed/preview we hand out one fictional "current week" metrics row per client.

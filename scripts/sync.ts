@@ -20,7 +20,6 @@ import {
   mapBisonStatus,
 } from '../lib/bison';
 import { addDays, getMondayOf, weekKey } from '../lib/derive';
-import { findLabelId, listAllProspects } from '../lib/masterinbox';
 import { listCorofyIntros } from '../lib/corofy';
 import { autoMatchCampaignIds } from '../lib/matchCampaigns';
 import { HISTORICAL_WEEKS } from '../lib/types';
@@ -28,20 +27,24 @@ import { HISTORICAL_WEEKS } from '../lib/types';
 interface SyncResult {
   instantly: { ok: boolean; error?: string; campaigns?: number; weeksBackfilled?: number };
   bison: { ok: boolean; error?: string; campaigns?: number; weeksBackfilled?: number; skipped?: boolean };
-  masterinbox: { ok: boolean; error?: string; intros?: number; skipped?: boolean };
   corofy: { ok: boolean; error?: string; intros?: number; skipped?: boolean; unmatched?: string[] };
+}
+
+// Collapse non-alphanumeric runs to single spaces so client names match across
+// minor formatting drift between Corofy ("C21 Results - Elite Team") and our
+// clients.name ("C21 Results Elite Team").
+function normalizeName(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 export async function runSync(): Promise<SyncResult> {
   const result: SyncResult = {
     instantly: { ok: false },
     bison: { ok: false },
-    masterinbox: { ok: false },
     corofy: { ok: false },
   };
   result.instantly = await runInstantly();
   result.bison = await runBison();
-  result.masterinbox = await runMasterInbox();
   result.corofy = await runCorofy();
   return result;
 }
@@ -376,108 +379,6 @@ async function runBison(): Promise<SyncResult['bison']> {
   }
 }
 
-async function runMasterInbox(): Promise<SyncResult['masterinbox']> {
-  if (!process.env.MASTERINBOX_API_KEY) return { ok: true, skipped: true };
-
-  const sb = getSupabase();
-  const { data: run } = await sb
-    .from('sync_runs')
-    .insert({ source: 'masterinbox' })
-    .select('id')
-    .single();
-
-  try {
-    const introLabelId = await findLabelId('Introduction');
-    if (introLabelId === null) {
-      throw new Error('"Introduction" label not found in MasterInbox workspace');
-    }
-
-    const prospects = await listAllProspects(100);
-    const intros = prospects.filter((p) => p.labels?.includes(introLabelId) && p.campaign_id);
-
-    const { mondayKeys } = backfillWindow();
-    const validWeekSet = new Set(mondayKeys);
-
-    const introTime = (p: typeof intros[number]): number =>
-      p.last_message ?? p.last_received_at ?? p.updated_at;
-
-    const byCampaignWeek = new Map<string, { count: number; latest: number }>();
-    const allTimeLatest = new Map<string, number>();
-
-    for (const p of intros) {
-      const t = introTime(p);
-      const wk = weekKey(new Date(t));
-
-      const allKey = p.campaign_id!;
-      if ((allTimeLatest.get(allKey) ?? 0) < t) allTimeLatest.set(allKey, t);
-
-      if (!validWeekSet.has(wk)) continue;
-      const key = `${p.campaign_id}|${wk}`;
-      const cur = byCampaignWeek.get(key) ?? { count: 0, latest: 0 };
-      cur.count++;
-      if (t > cur.latest) cur.latest = t;
-      byCampaignWeek.set(key, cur);
-    }
-
-    const { data: clients } = await sb
-      .from('clients')
-      .select('id, instantly_campaign_ids, bison_campaign_ids');
-    if (clients) {
-      const upserts: {
-        client_id: string;
-        week_key: string;
-        intros: number;
-        last_intro_at: string | null;
-      }[] = [];
-      for (const c of clients as { id: string; instantly_campaign_ids: string[]; bison_campaign_ids: string[] }[]) {
-        // Union both sources — MasterInbox prospect.campaign_id will match
-        // whichever vendor the email came from (Instantly UUIDs and Bison
-        // UUIDs can't collide).
-        const allLinked = [...(c.instantly_campaign_ids ?? []), ...(c.bison_campaign_ids ?? [])];
-
-        const linkedAllTimeLatest = allLinked
-          .map((cid) => allTimeLatest.get(cid) ?? 0)
-          .reduce((a, b) => Math.max(a, b), 0);
-
-        for (const wk of mondayKeys) {
-          let count = 0;
-          let latest = 0;
-          for (const cid of allLinked) {
-            const stats = byCampaignWeek.get(`${cid}|${wk}`);
-            if (stats) {
-              count += stats.count;
-              if (stats.latest > latest) latest = stats.latest;
-            }
-          }
-          const ts = latest > 0 ? latest : linkedAllTimeLatest;
-          upserts.push({
-            client_id: c.id,
-            week_key: wk,
-            intros: count,
-            last_intro_at: ts > 0 ? new Date(ts).toISOString() : null,
-          });
-        }
-      }
-      if (upserts.length > 0) {
-        const { error } = await sb
-          .from('weekly_metrics')
-          .upsert(upserts, { onConflict: 'client_id,week_key', ignoreDuplicates: false });
-        if (error) throw new Error(error.message);
-      }
-    }
-
-    await sb.from('sync_runs').update({ ok: true, finished_at: new Date().toISOString() }).eq('id', run?.id);
-    return { ok: true, intros: intros.length };
-  } catch (err) {
-    const message = (err as Error).message;
-    await sb
-      .from('sync_runs')
-      .update({ ok: false, error: message, finished_at: new Date().toISOString() })
-      .eq('id', run?.id);
-    return { ok: false, error: message };
-  }
-}
-
 async function runCorofy(): Promise<SyncResult['corofy']> {
   if (!process.env.COROFY_ADMIN_TOKEN || !process.env.COROFY_BASE_URL) {
     return { ok: true, skipped: true };
@@ -495,21 +396,25 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
     const { mondayKeys } = backfillWindow();
     const validWeekSet = new Set(mondayKeys);
 
-    // Bucket by (client_name, week_key) — count + latest timestamp.
+    // Bucket by (normalized client_name, week_key). Normalization collapses
+    // punctuation/whitespace drift so "C21 Results - Elite Team" (Corofy) maps
+    // to "C21 Results Elite Team" (our clients.name).
     const byNameWeek = new Map<string, { count: number; latest: number }>();
     const allTimeLatestByName = new Map<string, number>();
-    const seenNames = new Set<string>();
+    const seenOriginalByNormalized = new Map<string, string>();
 
     for (const i of intros) {
       const t = new Date(i.assigned_at).getTime();
       if (!Number.isFinite(t)) continue;
-      const nameKey = i.client_name;
-      seenNames.add(nameKey);
-      if ((allTimeLatestByName.get(nameKey) ?? 0) < t) allTimeLatestByName.set(nameKey, t);
+      const normKey = normalizeName(i.client_name);
+      if (!seenOriginalByNormalized.has(normKey)) {
+        seenOriginalByNormalized.set(normKey, i.client_name);
+      }
+      if ((allTimeLatestByName.get(normKey) ?? 0) < t) allTimeLatestByName.set(normKey, t);
 
       const wk = weekKey(new Date(t));
       if (!validWeekSet.has(wk)) continue;
-      const k = `${nameKey}|${wk}`;
+      const k = `${normKey}|${wk}`;
       const cur = byNameWeek.get(k) ?? { count: 0, latest: 0 };
       cur.count++;
       if (t > cur.latest) cur.latest = t;
@@ -517,7 +422,7 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
     }
 
     const { data: clients } = await sb.from('clients').select('id, name');
-    const matchedNames = new Set<string>();
+    const matchedNormalized = new Set<string>();
     if (clients) {
       const upserts: {
         client_id: string;
@@ -526,17 +431,16 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
         last_corofy_intro_at: string | null;
       }[] = [];
       for (const c of clients as { id: string; name: string }[]) {
-        if (seenNames.has(c.name)) matchedNames.add(c.name);
-        const allTime = allTimeLatestByName.get(c.name) ?? 0;
+        const normKey = normalizeName(c.name);
+        if (seenOriginalByNormalized.has(normKey)) matchedNormalized.add(normKey);
+        const allTime = allTimeLatestByName.get(normKey) ?? 0;
         for (const wk of mondayKeys) {
-          const stats = byNameWeek.get(`${c.name}|${wk}`);
+          const stats = byNameWeek.get(`${normKey}|${wk}`);
           const count = stats?.count ?? 0;
           const latest = stats?.latest ?? 0;
           const ts = latest > 0 ? latest : allTime;
           // Always emit so weeks with no current intros are reset to 0 (otherwise
           // a deletion on the Corofy side would never clear our cached count).
-          // Supabase upsert merges columns we don't list, so MasterInbox's
-          // intros / last_intro_at columns stay untouched.
           upserts.push({
             client_id: c.id,
             week_key: wk,
@@ -553,7 +457,10 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       }
     }
 
-    const unmatched = [...seenNames].filter((n) => !matchedNames.has(n));
+    // Surface ORIGINAL Corofy names (not normalized) so the warning is human-readable.
+    const unmatched = [...seenOriginalByNormalized.entries()]
+      .filter(([norm]) => !matchedNormalized.has(norm))
+      .map(([, original]) => original);
     if (unmatched.length > 0) {
       console.warn(
         `[corofy] ${unmatched.length} client name(s) from Corofy did not match any clients.name: ${unmatched.join(', ')}`
@@ -579,7 +486,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const allOk =
         r.instantly.ok &&
         r.bison.ok &&
-        r.masterinbox.ok &&
         r.corofy.ok;
       process.exit(allOk ? 0 : 1);
     })

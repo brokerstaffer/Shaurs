@@ -2,17 +2,9 @@ import type { DashboardClient, WeeklyMetric } from './types';
 
 const EMPTY_METRIC: Omit<WeeklyMetric, 'client_id' | 'week_key'> = {
   emails_sent: 0,
-  intros: 0,
-  last_intro_at: null,
   intros_corofy: 0,
   last_corofy_intro_at: null,
 };
-
-function pickLatest(a: string | null, b: string | null): string | null {
-  if (!a) return b;
-  if (!b) return a;
-  return new Date(a).getTime() >= new Date(b).getTime() ? a : b;
-}
 
 export function metricFor(c: DashboardClient, weekKey: string): WeeklyMetric {
   return c.metricsByWeek[weekKey] ?? {
@@ -92,10 +84,8 @@ export interface DerivedRow {
 export function derive(c: DashboardClient, weekKey: string): DerivedRow {
   const m = metricFor(c, weekKey);
   const hasEmails = m.emails_sent > 0;
-  // Total intros = MasterInbox + Corofy. Each source is stored independently
-  // in weekly_metrics so contributions stay auditable; we sum at read time.
-  const intros = m.intros + m.intros_corofy;
-  const lastAt = pickLatest(m.last_intro_at, m.last_corofy_intro_at);
+  const intros = m.intros_corofy;
+  const lastAt = m.last_corofy_intro_at;
   const hasIntros = intros > 0 || lastAt !== null;
   const emails = m.emails_sent;
 
