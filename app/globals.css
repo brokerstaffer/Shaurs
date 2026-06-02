@@ -314,8 +314,13 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 .s-pending { background: var(--yellow-bg); border: 1px solid var(--yellow-border); color: var(--yellow); }
 .s-pending .status-dot { background: var(--yellow); }
 
-.actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 108px; white-space: nowrap; }
-.btn-icon { flex: 0 0 auto; background: none; border: 1px solid var(--border); border-radius: 7px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px; color: var(--text-muted); transition: all 0.15s; }
+.actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; white-space: nowrap; }
+.btn-icon { flex: 0 0 auto; background: none; border: 1px solid var(--border); border-radius: 7px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px; color: var(--text-muted); transition: all 0.15s; padding: 0; }
+
+/* Pin the actions column to exactly its content width so the delete button
+   never gets clipped — other columns absorb the remaining table width. */
+thead th:last-child,
+tbody td:last-child { width: 1%; white-space: nowrap; padding-left: 8px; padding-right: 12px; }
 .btn-icon:hover     { border-color: var(--blue);       color: var(--blue); background: var(--blue-pale); }
 .btn-icon.del:hover { border-color: var(--red-border); color: var(--red);  background: var(--red-bg); }
 
