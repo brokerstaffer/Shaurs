@@ -108,6 +108,33 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 .client-meta:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-pale); }
 .client-meta.is-empty { cursor: default; }
 .client-meta.is-empty:hover { border-color: var(--border); color: var(--text-muted); background: var(--bg); }
+
+/* "Campaign Paused": campaign was launched but is now paused/finished.
+   Amber tint signals "was running, attention needed". */
+.client-meta.is-paused-camp {
+  color: var(--yellow);
+  background: var(--yellow-bg);
+  border-color: var(--yellow-border);
+}
+.client-meta.is-paused-camp::before {
+  content: '⏸';
+  font-size: 9px;
+  margin-right: 2px;
+  opacity: 0.85;
+}
+.client-meta.is-paused-camp:hover {
+  color: var(--yellow);
+  background: var(--yellow-bg);
+  border-color: var(--yellow-border);
+}
+
+/* "Not Active": no campaign launched yet (draft / nothing linked). Keep
+   neutral gray — strictly muted to read differently from the amber pill. */
+.client-meta.is-not-launched {
+  color: var(--text-muted);
+  background: var(--bg);
+  border-style: dashed;
+}
 .client-meta-dot {
   width: 6px; height: 6px; border-radius: 50%; background: var(--green);
   animation: blink 1.4s infinite; flex-shrink: 0;

@@ -22,7 +22,7 @@ import {
   type Plan,
 } from '@/lib/types';
 
-type Filter = 'all' | 'risk' | 'ok';
+type Filter = 'all' | 'risk' | 'ok' | 'active-camp' | 'no-active-camp';
 
 interface Props {
   initialClients: DashboardClient[];
@@ -119,11 +119,22 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       if (filter === 'all') return true;
       if (filter === 'risk') return d.status === 'risk';
       if (filter === 'ok') return d.status === 'ok';
+      if (filter === 'active-camp') {
+        return (
+          c.campaigns.some((x) => x.status === 'running') ||
+          c.bisonCampaigns.some((x) => x.status === 'running')
+        );
+      }
+      if (filter === 'no-active-camp') {
+        return (
+          !c.campaigns.some((x) => x.status === 'running') &&
+          !c.bisonCampaigns.some((x) => x.status === 'running')
+        );
+      }
       return true;
     });
-    if (!showHidden) {
-      list = list.filter((c) => !c.hidden);
-    }
+    // Show Hidden toggle: off → exclude hidden; on → ONLY hidden.
+    list = list.filter((c) => (showHidden ? c.hidden : !c.hidden));
     if (sortByLeft) {
       list = [...list].sort((a, b) => derive(b, key).leftThisWeek - derive(a, key).leftThisWeek);
     } else if (sortByClient === 'campaigns') {
@@ -169,7 +180,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       ok,
       intros,
       emails,
-      conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) : '—',
+      conv: convDen > 0 ? ((convNum / convDen) * 100).toFixed(1) + '%' : '—',
     };
   }, [clients, key]);
 
@@ -388,7 +399,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             num={summary.emails.toLocaleString()}
             sub="across all clients"
           />
-          <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="1k email → intro" />
+          <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="email → intro" />
         </div>
 
         <div className="table-wrap">
@@ -403,10 +414,12 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <button className={'fpill' + (filter === 'all' ? ' active' : '')} onClick={() => setFilter('all')}>All</button>
               <button className={'fpill f-risk' + (filter === 'risk' ? ' active' : '')} onClick={() => setFilter('risk')}>At Risk</button>
               <button className={'fpill f-ok' + (filter === 'ok' ? ' active' : '')} onClick={() => setFilter('ok')}>On Track</button>
+              <button className={'fpill' + (filter === 'active-camp' ? ' active' : '')} onClick={() => setFilter('active-camp')}>Active Campaign</button>
+              <button className={'fpill' + (filter === 'no-active-camp' ? ' active' : '')} onClick={() => setFilter('no-active-camp')}>No Active</button>
               <button
                 className={'fpill' + (showHidden ? ' active' : '')}
                 onClick={() => setShowHidden((v) => !v)}
-                title="Include clients you've manually hidden"
+                title={showHidden ? 'Back to active clients' : 'Show only hidden clients'}
               >
                 {showHidden ? 'Hide Hidden' : 'Show Hidden'}
               </button>
@@ -814,12 +827,12 @@ function ClientRow({
     />
   );
 
-  // conv cell — intros per 1,000 emails sent
+  // conv cell — intros as a percentage of emails sent
   const convCell =
-    d.convPer1k === null ? (
+    d.convPct === null ? (
       <span className="conv-rate conv-none">—</span>
     ) : (
-      <span className={`conv-rate conv-${d.convClass}`}>{d.convPer1k.toFixed(1)}</span>
+      <span className={`conv-rate conv-${d.convClass}`}>{d.convPct.toFixed(1)}%</span>
     );
 
   // left pill
@@ -958,7 +971,11 @@ function ClientRow({
         </div>
         {since && <div className="client-since">Since {since}</div>}
         <div
-          className={'client-meta' + (campsCount === 0 ? ' is-empty' : '')}
+          className={
+            'client-meta'
+            + (campsCount === 0 ? ' is-empty' : '')
+            + (campsCount === 0 ? (hasLaunched ? ' is-paused-camp' : ' is-not-launched') : '')
+          }
           onClick={campsCount > 0 ? onShowCampaigns : undefined}
           role={campsCount > 0 ? 'button' : undefined}
           aria-label={
