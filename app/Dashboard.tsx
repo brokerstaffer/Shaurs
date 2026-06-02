@@ -22,7 +22,7 @@ import {
   type Plan,
 } from '@/lib/types';
 
-type Filter = 'all' | 'risk' | 'ok' | 'active-camp' | 'no-active-camp';
+type Filter = 'all' | 'risk' | 'ok';
 
 interface Props {
   initialClients: DashboardClient[];
@@ -78,6 +78,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [clients, setClients] = useState<DashboardClient[]>(initialClients);
   const [currentMonday, setCurrentMonday] = useState<Date>(() => getMondayOf(new Date()));
   const [filter, setFilter] = useState<Filter>('all');
+  // Paused clients (zero running campaigns) are hidden from the main table by
+  // default — they're not actionable but we keep them in the DB for history.
+  const [showPaused, setShowPaused] = useState(false);
   const [sortByLeft, setSortByLeft] = useState(false);
   // 'campaigns' = sort by # active campaigns desc, total campaigns as tiebreaker.
   // null = default order (name asc, server-provided).
@@ -116,20 +119,15 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       if (filter === 'all') return true;
       if (filter === 'risk') return d.status === 'risk';
       if (filter === 'ok') return d.status === 'ok';
-      if (filter === 'active-camp') {
-        return (
-          c.campaigns.some((x) => x.status === 'running') ||
-          c.bisonCampaigns.some((x) => x.status === 'running')
-        );
-      }
-      if (filter === 'no-active-camp') {
-        return (
-          !c.campaigns.some((x) => x.status === 'running') &&
-          !c.bisonCampaigns.some((x) => x.status === 'running')
-        );
-      }
       return true;
     });
+    if (!showPaused) {
+      list = list.filter(
+        (c) =>
+          c.campaigns.some((x) => x.status === 'running') ||
+          c.bisonCampaigns.some((x) => x.status === 'running')
+      );
+    }
     if (sortByLeft) {
       list = [...list].sort((a, b) => derive(b, key).leftThisWeek - derive(a, key).leftThisWeek);
     } else if (sortByClient === 'campaigns') {
@@ -147,7 +145,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       });
     }
     return list;
-  }, [clients, filter, sortByLeft, sortByClient, key]);
+  }, [clients, filter, sortByLeft, sortByClient, key, showPaused]);
 
   const summary = useMemo(() => {
     let total = 0;
@@ -175,7 +173,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       ok,
       intros,
       emails,
-      conv: convDen > 0 ? ((convNum / convDen) * 100).toFixed(1) + '%' : '—',
+      conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) : '—',
     };
   }, [clients, key]);
 
@@ -376,7 +374,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             num={summary.emails.toLocaleString()}
             sub="across all clients"
           />
-          <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="email → intro" />
+          <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="1k email → intro" />
         </div>
 
         <div className="table-wrap">
@@ -391,8 +389,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <button className={'fpill' + (filter === 'all' ? ' active' : '')} onClick={() => setFilter('all')}>All</button>
               <button className={'fpill f-risk' + (filter === 'risk' ? ' active' : '')} onClick={() => setFilter('risk')}>At Risk</button>
               <button className={'fpill f-ok' + (filter === 'ok' ? ' active' : '')} onClick={() => setFilter('ok')}>On Track</button>
-              <button className={'fpill' + (filter === 'active-camp' ? ' active' : '')} onClick={() => setFilter('active-camp')}>Active Campaign</button>
-              <button className={'fpill' + (filter === 'no-active-camp' ? ' active' : '')} onClick={() => setFilter('no-active-camp')}>No Active</button>
+              <button
+                className={'fpill' + (showPaused ? ' active' : '')}
+                onClick={() => setShowPaused((v) => !v)}
+                title="Include clients with no running campaigns"
+              >
+                {showPaused ? 'Hide Paused' : 'Show Paused'}
+              </button>
             </div>
           </div>
           <div className="table-scroll">
@@ -595,7 +598,7 @@ function CampaignRow({ c }: { c: PopupCampaign }) {
           : 'is-draft';
   const statusLabel =
     c.status === 'paused'
-      ? 'Paused'
+      ? 'Campaign Paused'
       : c.status === 'finished'
         ? 'Finished'
         : c.status === 'running'
@@ -794,12 +797,12 @@ function ClientRow({
     />
   );
 
-  // conv cell
+  // conv cell — intros per 1,000 emails sent
   const convCell =
-    d.convPct === null ? (
+    d.convPer1k === null ? (
       <span className="conv-rate conv-none">—</span>
     ) : (
-      <span className={`conv-rate conv-${d.convClass}`}>{d.convPct.toFixed(1)}%</span>
+      <span className={`conv-rate conv-${d.convClass}`}>{d.convPer1k.toFixed(1)}</span>
     );
 
   // left pill

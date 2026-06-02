@@ -74,7 +74,7 @@ export interface DerivedRow {
   hasIntros: boolean;
   metTarget: boolean;
   status: 'risk' | 'ok' | 'pending';
-  convPct: number | null;
+  convPer1k: number | null; // intros per 1,000 emails sent
   convClass: 'good' | 'mid' | 'low' | 'none';
   leftThisWeek: number; // 0 if met
   daysSince: number | null;
@@ -97,11 +97,11 @@ export function derive(c: DashboardClient, weekKey: string): DerivedRow {
       ? 'risk'
       : 'ok';
 
-  let convPct: number | null = null;
+  let convPer1k: number | null = null;
   let convClass: 'good' | 'mid' | 'low' | 'none' = 'none';
   if (emails > 0) {
-    convPct = (intros / emails) * 100;
-    convClass = convPct >= 5 ? 'good' : convPct >= 2 ? 'mid' : 'low';
+    convPer1k = (intros / emails) * 1000;
+    convClass = convPer1k >= 50 ? 'good' : convPer1k >= 20 ? 'mid' : 'low';
   }
 
   const leftThisWeek = Math.max(0, c.weekly_target - intros);
@@ -117,7 +117,7 @@ export function derive(c: DashboardClient, weekKey: string): DerivedRow {
     hasIntros,
     metTarget,
     status,
-    convPct,
+    convPer1k,
     convClass,
     leftThisWeek,
     daysSince: daysSinceLastIntro(lastAt),
