@@ -180,7 +180,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       ok,
       intros,
       emails,
-      conv: convDen > 0 ? ((convNum / convDen) * 100).toFixed(1) + '%' : '—',
+      conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) + '%' : '—',
     };
   }, [clients, key]);
 

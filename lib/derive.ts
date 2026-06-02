@@ -74,7 +74,7 @@ export interface DerivedRow {
   hasIntros: boolean;
   metTarget: boolean;
   status: 'risk' | 'ok' | 'pending';
-  convPct: number | null; // conversion percentage (intros / emails * 100)
+  convPct: number | null; // intros per 1,000 emails (displayed with "%" suffix per product spec)
   convClass: 'good' | 'mid' | 'low' | 'none';
   leftThisWeek: number; // 0 if met
   daysSince: number | null;
@@ -100,8 +100,8 @@ export function derive(c: DashboardClient, weekKey: string): DerivedRow {
   let convPct: number | null = null;
   let convClass: 'good' | 'mid' | 'low' | 'none' = 'none';
   if (emails > 0) {
-    convPct = (intros / emails) * 100;
-    convClass = convPct >= 5 ? 'good' : convPct >= 2 ? 'mid' : 'low';
+    convPct = (intros / emails) * 1000;
+    convClass = convPct >= 50 ? 'good' : convPct >= 20 ? 'mid' : 'low';
   }
 
   const leftThisWeek = Math.max(0, c.weekly_target - intros);
