@@ -406,7 +406,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             num={summary.emails.toLocaleString()}
             sub="across all clients"
           />
-          <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="email → intro" />
+          <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="1k email → intro" />
         </div>
 
         <div className="table-wrap">
