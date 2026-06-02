@@ -33,6 +33,7 @@ export interface Client {
   instantly_campaign_ids: string[];
   bison_campaign_ids: string[];
   campaign_size: number;
+  hidden: boolean; // manual per-client hide flag (default false)
 }
 
 export interface WeeklyMetric {

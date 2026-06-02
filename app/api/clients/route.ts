@@ -45,6 +45,7 @@ export async function PATCH(req: NextRequest) {
   // Only include bison_campaign_ids if the caller sent it — keeps older
   // clients from accidentally clearing the array via PATCH.
   if (body.bison_campaign_ids !== undefined) update.bison_campaign_ids = body.bison_campaign_ids;
+  if (body.hidden !== undefined) update.hidden = body.hidden;
   const { data, error } = await sb
     .from('clients')
     .update(update)

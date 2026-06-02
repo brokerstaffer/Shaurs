@@ -17,7 +17,8 @@ export function generateSeed(): DashboardClient[] {
   });
 
   // For seed/preview we hand out one fictional "current week" metrics row per client.
-  const seed: DashboardClient[] = [
+  // The map() below fills hidden=false so the literals here can omit it.
+  const seed: Omit<DashboardClient, 'hidden'>[] = [
     {
       id: 'de001',
       name: 'Douglas Elliman',
@@ -142,5 +143,5 @@ export function generateSeed(): DashboardClient[] {
     },
   ];
 
-  return seed;
+  return seed.map((c) => ({ ...c, hidden: false }));
 }

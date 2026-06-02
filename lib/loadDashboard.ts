@@ -22,6 +22,7 @@ interface ClientRow {
   instantly_campaign_ids: string[];
   bison_campaign_ids: string[];
   campaign_size: number;
+  hidden: boolean;
 }
 
 export async function loadDashboardClients(): Promise<{
@@ -105,6 +106,7 @@ export async function loadDashboardClients(): Promise<{
       instantly_campaign_ids: c.instantly_campaign_ids ?? [],
       bison_campaign_ids: c.bison_campaign_ids ?? [],
       campaign_size: c.campaign_size ?? 0,
+      hidden: c.hidden ?? false,
       campaigns: linkedCampaigns,
       bisonCampaigns: linkedBison,
       metricsByWeek: metricsByClient.get(c.id) ?? {},

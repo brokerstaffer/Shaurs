@@ -78,9 +78,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [clients, setClients] = useState<DashboardClient[]>(initialClients);
   const [currentMonday, setCurrentMonday] = useState<Date>(() => getMondayOf(new Date()));
   const [filter, setFilter] = useState<Filter>('all');
-  // Paused clients (zero running campaigns) are hidden from the main table by
-  // default — they're not actionable but we keep them in the DB for history.
-  const [showPaused, setShowPaused] = useState(false);
+  // Manually-hidden clients (clients.hidden=true) are excluded from the main
+  // table by default. Toggle reveals them with a faded "Hidden" row treatment.
+  const [showHidden, setShowHidden] = useState(false);
   const [sortByLeft, setSortByLeft] = useState(false);
   // 'campaigns' = sort by # active campaigns desc, total campaigns as tiebreaker.
   // null = default order (name asc, server-provided).
@@ -121,12 +121,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       if (filter === 'ok') return d.status === 'ok';
       return true;
     });
-    if (!showPaused) {
-      list = list.filter(
-        (c) =>
-          c.campaigns.some((x) => x.status === 'running') ||
-          c.bisonCampaigns.some((x) => x.status === 'running')
-      );
+    if (!showHidden) {
+      list = list.filter((c) => !c.hidden);
     }
     if (sortByLeft) {
       list = [...list].sort((a, b) => derive(b, key).leftThisWeek - derive(a, key).leftThisWeek);
@@ -145,7 +141,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       });
     }
     return list;
-  }, [clients, filter, sortByLeft, sortByClient, key, showPaused]);
+  }, [clients, filter, sortByLeft, sortByClient, key, showHidden]);
 
   const summary = useMemo(() => {
     let total = 0;
@@ -249,6 +245,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             ...payload,
             id: client.id,
             campaign_size: 0,
+            hidden: false,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},
@@ -286,6 +283,23 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       router.refresh();
     } catch (err) {
       setToast(`Delete failed: ${(err as Error).message.slice(0, 80)}`);
+    }
+  }
+
+  async function toggleHidden(id: string, hidden: boolean) {
+    // Optimistic update; PATCH; roll back on failure.
+    setClients((list) => list.map((c) => (c.id === id ? { ...c, hidden } : c)));
+    try {
+      const res = await fetch('/api/clients', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, hidden }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setToast(hidden ? 'Client hidden · Show Hidden to recover' : 'Client unhidden');
+    } catch (err) {
+      setClients((list) => list.map((c) => (c.id === id ? { ...c, hidden: !hidden } : c)));
+      setToast(`Failed: ${(err as Error).message.slice(0, 80)}`);
     }
   }
 
@@ -390,11 +404,11 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <button className={'fpill f-risk' + (filter === 'risk' ? ' active' : '')} onClick={() => setFilter('risk')}>At Risk</button>
               <button className={'fpill f-ok' + (filter === 'ok' ? ' active' : '')} onClick={() => setFilter('ok')}>On Track</button>
               <button
-                className={'fpill' + (showPaused ? ' active' : '')}
-                onClick={() => setShowPaused((v) => !v)}
-                title="Include clients with no running campaigns"
+                className={'fpill' + (showHidden ? ' active' : '')}
+                onClick={() => setShowHidden((v) => !v)}
+                title="Include clients you've manually hidden"
               >
-                {showPaused ? 'Hide Paused' : 'Show Paused'}
+                {showHidden ? 'Hide Hidden' : 'Show Hidden'}
               </button>
             </div>
           </div>
@@ -452,6 +466,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       onShowCampaigns={() => setCampaignsPopupClientId(c.id)}
                       onEdit={() => openEditModal(c)}
                       onDelete={() => deleteClient(c.id)}
+                      onToggleHidden={(h) => toggleHidden(c.id, h)}
                     />
                   ))}
                 </tbody>
@@ -761,6 +776,7 @@ function ClientRow({
   onShowCampaigns,
   onEdit,
   onDelete,
+  onToggleHidden,
 }: {
   client: DashboardClient;
   weekKey: string;
@@ -769,6 +785,7 @@ function ClientRow({
   onShowCampaigns: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onToggleHidden: (hidden: boolean) => void;
 }) {
   const d = derive(client, wk);
   // Per spec, the dashboard only reflects ACTIVE (running) campaigns:
@@ -909,10 +926,20 @@ function ClientRow({
 
   // Per spec, the dashboard only counts ACTIVE campaigns under each client.
   const campsCount = activeCampaigns.length;
+  // When no campaign is running, split the empty-state label by whether any
+  // campaign was ever launched. Paused or finished → "Campaign Paused".
+  // Only draft / nothing linked → "Not Active".
+  const hasLaunched =
+    client.campaigns.some((c) => c.status === 'paused' || c.status === 'finished') ||
+    client.bisonCampaigns.some((c) => c.status === 'paused' || c.status === 'finished');
   const campsLabel =
-    campsCount === 0 ? 'No active campaigns'
-      : campsCount === 1 ? '1 active campaign'
-      : `${campsCount} active campaigns`;
+    campsCount > 0
+      ? campsCount === 1
+        ? '1 active campaign'
+        : `${campsCount} active campaigns`
+      : hasLaunched
+        ? 'Campaign Paused'
+        : 'Not Active';
 
   const since = client.start_date
     ? new Date(client.start_date).toLocaleDateString('en-US', {
@@ -923,9 +950,12 @@ function ClientRow({
     : null;
 
   return (
-    <tr>
+    <tr className={client.hidden ? 'is-hidden' : ''}>
       <td className="client-cell">
-        <div className="client-name">{client.name}</div>
+        <div className="client-name">
+          {client.name}
+          {client.hidden && <span className="hidden-badge">Hidden</span>}
+        </div>
         {since && <div className="client-since">Since {since}</div>}
         <div
           className={'client-meta' + (campsCount === 0 ? ' is-empty' : '')}
@@ -934,7 +964,7 @@ function ClientRow({
           aria-label={
             campsCount > 0
               ? `View ${campsCount} active campaign${campsCount === 1 ? '' : 's'}`
-              : 'No active campaigns'
+              : campsLabel
           }
         >
           {campsCount > 0 && <span className="client-meta-dot" />}
@@ -953,6 +983,13 @@ function ClientRow({
       <td>
         <div className="actions">
           <button className="btn-icon" title="Edit" onClick={onEdit}>✏️</button>
+          <button
+            className="btn-icon"
+            title={client.hidden ? 'Unhide client' : 'Hide client'}
+            onClick={() => onToggleHidden(!client.hidden)}
+          >
+            {client.hidden ? '👁' : '🙈'}
+          </button>
           <button className="btn-icon del" title="Remove" onClick={onDelete}>🗑</button>
         </div>
       </td>
