@@ -396,6 +396,20 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
     const { mondayKeys } = backfillWindow();
     const validWeekSet = new Set(mondayKeys);
 
+    // TEMP DEBUG (remove after diagnosing this-week-bucket drift):
+    // Log Keyes intros with their assigned_at + computed week_key.
+    const _keyes = intros.filter((i) =>
+      (i.client_name ?? '').toLowerCase().includes('keyes'),
+    );
+    console.warn(`[corofy DEBUG] Keyes intros from Corofy: ${_keyes.length}`);
+    for (const i of _keyes) {
+      const t = new Date(i.assigned_at).getTime();
+      const wk = Number.isFinite(t) ? weekKey(new Date(t)) : 'INVALID';
+      console.warn(
+        `[corofy DEBUG]   client_name=${JSON.stringify(i.client_name)}  assigned_at=${i.assigned_at}  week_key=${wk}`,
+      );
+    }
+
     // Bucket by (normalized client_name, week_key). Normalization collapses
     // punctuation/whitespace drift so "C21 Results - Elite Team" (Corofy) maps
     // to "C21 Results Elite Team" (our clients.name).
