@@ -549,11 +549,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   runSync()
     .then((r) => {
       console.log(JSON.stringify(r, null, 2));
-      const allOk =
-        r.instantly.ok &&
-        r.bison.ok &&
-        r.corofy.ok;
-      process.exit(allOk ? 0 : 1);
+      // Exit 1 only if EVERY source failed — a single transient hiccup
+      // shouldn't crash the cron (the other sources already wrote their
+      // data, and the failing one will retry on the next 15-min tick).
+      // The JSON output above is the source of truth for diagnostics.
+      const anyOk = r.instantly.ok || r.bison.ok || r.corofy.ok;
+      if (!anyOk) console.error('All sync sources failed.');
+      process.exit(anyOk ? 0 : 1);
     })
     .catch((err) => {
       console.error(err);

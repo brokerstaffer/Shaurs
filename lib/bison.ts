@@ -32,18 +32,34 @@ async function get<T>(path: string, params?: Record<string, string | number | un
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     }
   }
-  const res = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${key()}`,
-      Accept: 'application/json',
-    },
-    cache: 'no-store',
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Bison ${path} ${res.status}: ${body.slice(0, 200)}`);
+  // Retry on transient network errors (TypeError: fetch failed) up to 3 times
+  // with exponential backoff. HTTP errors (non-2xx) are NOT retried — those
+  // are real responses from Bison and should bubble up immediately.
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(url.toString(), {
+        headers: {
+          Authorization: `Bearer ${key()}`,
+          Accept: 'application/json',
+        },
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`Bison ${path} ${res.status}: ${body.slice(0, 200)}`);
+      }
+      return (await res.json()) as T;
+    } catch (err) {
+      lastErr = err;
+      // Only retry on network errors; pass HTTP errors through.
+      if (err instanceof Error && err.message.startsWith('Bison ')) throw err;
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+      }
+    }
   }
-  return (await res.json()) as T;
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 export interface BisonCampaignSummary {
