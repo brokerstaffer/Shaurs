@@ -11,7 +11,8 @@ import {
   type Plan,
   type WeeklyMetric,
 } from './types';
-import { addDays, getMondayOf, weekKey } from './derive';
+import { addDays, getMondayOf, normalizeName, weekKey } from './derive';
+import { listCorofyPortals } from './portals';
 
 interface ClientRow {
   id: string;
@@ -23,6 +24,7 @@ interface ClientRow {
   bison_campaign_ids: string[];
   campaign_size: number;
   hidden: boolean;
+  client_paused: boolean;
 }
 
 export async function loadDashboardClients(): Promise<{
@@ -48,12 +50,24 @@ export async function loadDashboardClients(): Promise<{
   // Sliding window: this Monday minus N-1 weeks.
   const earliestMonday = weekKey(addDays(getMondayOf(new Date()), -7 * (HISTORICAL_WEEKS - 1)));
 
-  const [clientsRes, metricsRes, campaignsRes, bisonRes] = await Promise.all([
+  const [clientsRes, metricsRes, campaignsRes, bisonRes, portals] = await Promise.all([
     sb.from('clients').select('*').order('name'),
     sb.from('weekly_metrics').select('*').gte('week_key', earliestMonday),
     sb.from('instantly_campaigns').select('*'),
     sb.from('bison_campaigns').select('*'),
+    listCorofyPortals(),
   ]);
+
+  // Normalized name → portal_enabled lookup. We match by name (with the same
+  // normalization Corofy intros use) since portals are not linked to our
+  // clients by id.
+  const portalActiveByName = new Set<string>();
+  for (const p of portals) {
+    if (p.portal_enabled) portalActiveByName.add(normalizeName(p.name));
+    for (const alias of p.aliases ?? []) {
+      if (p.portal_enabled) portalActiveByName.add(normalizeName(alias));
+    }
+  }
 
   if (clientsRes.error) {
     return {
@@ -107,9 +121,11 @@ export async function loadDashboardClients(): Promise<{
       bison_campaign_ids: c.bison_campaign_ids ?? [],
       campaign_size: c.campaign_size ?? 0,
       hidden: c.hidden ?? false,
+      client_paused: c.client_paused ?? false,
       campaigns: linkedCampaigns,
       bisonCampaigns: linkedBison,
       metricsByWeek: metricsByClient.get(c.id) ?? {},
+      portalActive: portalActiveByName.has(normalizeName(c.name)),
     };
   });
 

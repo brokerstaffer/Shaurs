@@ -19,7 +19,7 @@ import {
   listBisonCampaigns,
   mapBisonStatus,
 } from '../lib/bison';
-import { addDays, getMondayOf, weekKey } from '../lib/derive';
+import { addDays, getMondayOf, normalizeName, weekKey } from '../lib/derive';
 import { listCorofyIntros } from '../lib/corofy';
 import { autoMatchCampaignIds } from '../lib/matchCampaigns';
 import { HISTORICAL_WEEKS } from '../lib/types';
@@ -30,12 +30,6 @@ interface SyncResult {
   corofy: { ok: boolean; error?: string; intros?: number; skipped?: boolean; unmatched?: string[] };
 }
 
-// Collapse non-alphanumeric runs to single spaces so client names match across
-// minor formatting drift between Corofy ("C21 Results - Elite Team") and our
-// clients.name ("C21 Results Elite Team").
-function normalizeName(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-}
 
 export async function runSync(): Promise<SyncResult> {
   const result: SyncResult = {
@@ -264,6 +258,7 @@ async function runBison(): Promise<SyncResult['bison']> {
       );
       const base: {
         id: string;
+        int_id: number;
         name: string;
         status: ReturnType<typeof mapBisonStatus>;
         emails_sent_total: number;
@@ -272,6 +267,7 @@ async function runBison(): Promise<SyncResult['bison']> {
         status_changed_at?: string | null;
       } = {
         id: c.uuid,
+        int_id: c.id, // Bison's integer id — needed for per-campaign endpoints
         name: c.name,
         status: newStatus,
         emails_sent_total: c.emails_sent ?? 0,
@@ -317,10 +313,19 @@ async function runBison(): Promise<SyncResult['bison']> {
       (c.bison_campaign_ids ?? []).forEach((id) => linkedIds.add(id));
     }
 
+    // uuid → integer id (from the list response); Bison's per-campaign
+    // endpoints reject UUIDs, so we use the int id when calling them.
+    const intIdByUuid = new Map<string, number>(campaigns.map((c) => [c.uuid, c.id]));
+
     const campaignWeekly = new Map<string, Map<string, number>>();
     for (const cid of linkedIds) {
+      const intId = intIdByUuid.get(cid);
+      if (intId === undefined) {
+        console.warn(`bison int id missing for ${cid} — skipping per-day fetch`);
+        continue;
+      }
       try {
-        const days = await bisonDailySent(cid, rangeStart, rangeEnd);
+        const days = await bisonDailySent(intId, rangeStart, rangeEnd);
         const buckets = new Map<string, number>();
         for (const d of days) {
           if (!d.date) continue;
@@ -329,7 +334,7 @@ async function runBison(): Promise<SyncResult['bison']> {
         }
         campaignWeekly.set(cid, buckets);
       } catch (err) {
-        console.warn(`bison daily-sent failed for ${cid}:`, (err as Error).message);
+        console.warn(`bison daily-sent failed for ${cid} (int_id=${intId}):`, (err as Error).message);
         campaignWeekly.set(cid, new Map());
       }
     }
@@ -396,19 +401,6 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
     const { mondayKeys } = backfillWindow();
     const validWeekSet = new Set(mondayKeys);
 
-    // TEMP DEBUG (remove after diagnosing this-week-bucket drift):
-    // Log Keyes intros with their assigned_at + computed week_key.
-    const _keyes = intros.filter((i) =>
-      (i.client_name ?? '').toLowerCase().includes('keyes'),
-    );
-    console.warn(`[corofy DEBUG] Keyes intros from Corofy: ${_keyes.length}`);
-    for (const i of _keyes) {
-      const t = new Date(i.assigned_at).getTime();
-      const wk = Number.isFinite(t) ? weekKey(new Date(t)) : 'INVALID';
-      console.warn(
-        `[corofy DEBUG]   client_name=${JSON.stringify(i.client_name)}  assigned_at=${i.assigned_at}  week_key=${wk}`,
-      );
-    }
 
     // Bucket by (normalized client_name, week_key). Normalization collapses
     // punctuation/whitespace drift so "C21 Results - Elite Team" (Corofy) maps

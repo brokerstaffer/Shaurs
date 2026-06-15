@@ -46,6 +46,7 @@ export async function PATCH(req: NextRequest) {
   // clients from accidentally clearing the array via PATCH.
   if (body.bison_campaign_ids !== undefined) update.bison_campaign_ids = body.bison_campaign_ids;
   if (body.hidden !== undefined) update.hidden = body.hidden;
+  if (body.client_paused !== undefined) update.client_paused = body.client_paused;
   const { data, error } = await sb
     .from('clients')
     .update(update)

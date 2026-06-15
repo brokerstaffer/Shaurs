@@ -50,6 +50,13 @@ export function fmtDate(d: Date | string): string {
   return asUTC(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
+// Collapse non-alphanumeric runs to single spaces. Used to match client names
+// across minor formatting drift (e.g. "C21 Results - Elite Team" from Corofy
+// vs "C21 Results Elite Team" in clients.name).
+export function normalizeName(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
 export function formatWeek(monday: Date): string {
   return `${fmtDate(monday)} – ${fmtDate(addDays(monday, 6))}`;
 }

@@ -33,7 +33,8 @@ export interface Client {
   instantly_campaign_ids: string[];
   bison_campaign_ids: string[];
   campaign_size: number;
-  hidden: boolean; // manual per-client hide flag (default false)
+  hidden: boolean;        // manual per-client hide flag (default false)
+  client_paused: boolean; // manual "service temporarily paused" flag (default false)
 }
 
 export interface WeeklyMetric {
@@ -50,6 +51,9 @@ export interface DashboardClient extends Client {
   // All weekly metrics this client has, keyed by ISO Monday (YYYY-MM-DD).
   // Lookup for the current visible week is O(1) — no DB hit on week change.
   metricsByWeek: Record<string, WeeklyMetric>;
+  // Derived runtime field (not a DB column): true when the client appears
+  // in Corofy's /api/clients/portals response with portal_enabled=true.
+  portalActive: boolean;
 }
 
 export const HISTORICAL_WEEKS = 26;

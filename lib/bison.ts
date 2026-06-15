@@ -86,12 +86,16 @@ export async function listBisonCampaigns(): Promise<BisonCampaignSummary[]> {
   return all;
 }
 
+// IMPORTANT: Bison's per-campaign endpoints (line-area-chart-stats, /campaigns/{id},
+// /sequence-steps, /stats) accept the INTEGER id only — passing the UUID 404s
+// silently. The list endpoint returns both `id` (int) and `uuid` (string); use
+// `id` here.
 export async function bisonDailySent(
-  campaignId: string,
+  intCampaignId: number,
   startDate: string,
   endDate: string
 ): Promise<{ date: string; sent: number }[]> {
-  const resp = await get<BisonChartResp>(`/api/campaigns/${campaignId}/line-area-chart-stats`, {
+  const resp = await get<BisonChartResp>(`/api/campaigns/${intCampaignId}/line-area-chart-stats`, {
     start_date: startDate,
     end_date: endDate,
   });

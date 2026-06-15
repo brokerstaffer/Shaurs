@@ -22,7 +22,9 @@ import {
   type Plan,
 } from '@/lib/types';
 
-type Filter = 'all' | 'risk' | 'ok' | 'active' | 'paused' | 'inactive' | 'hidden';
+type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' | 'client-paused' | 'hidden';
+
+type SortBy = null | 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails';
 
 interface Props {
   initialClients: DashboardClient[];
@@ -78,10 +80,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [clients, setClients] = useState<DashboardClient[]>(initialClients);
   const [currentMonday, setCurrentMonday] = useState<Date>(() => getMondayOf(new Date()));
   const [filter, setFilter] = useState<Filter>('all');
-  const [sortByLeft, setSortByLeft] = useState(false);
-  // 'campaigns' = sort by # active campaigns desc, total campaigns as tiebreaker.
-  // null = default order (name asc, server-provided).
-  const [sortByClient, setSortByClient] = useState<null | 'campaigns'>(null);
+  // Unified sort state. null = default (name asc, server-provided).
+  // 'campaigns' = by # active campaigns desc; 'leftWeek' = by leftThisWeek desc;
+  // 'lastIntro' = by last_intro_at desc (clients with no intro sink); 'emails'
+  // = by emails_sent desc.
+  const [sortBy, setSortBy] = useState<SortBy>(null);
+  const [dateRange, setDateRange] = useState<{ from: string | null; to: string | null }>({ from: null, to: null });
+  const [datePopoverOpen, setDatePopoverOpen] = useState(false);
   const [campaignSelections, setCampaignSelections] = useState<Record<string, string>>({});
   const [campaignsPopupClientId, setCampaignsPopupClientId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -111,9 +116,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const isCurrent = isCurrentWeek(key);
 
   const visible = useMemo(() => {
-    // "Hidden" is a filter mode: it shows ONLY hidden clients (and only those).
-    // Every other filter implicitly excludes hidden clients.
-    let list = clients.filter((c) => (filter === 'hidden' ? c.hidden : !c.hidden));
+    // Default-exclude logic: hidden and client_paused clients only show under
+    // their respective filter tabs. Every other filter implicitly hides both.
+    let list = clients.filter((c) => {
+      if (filter === 'hidden') return c.hidden;
+      if (filter === 'client-paused') return c.client_paused;
+      return !c.hidden && !c.client_paused;
+    });
     list = list.filter((c) => {
       const d = derive(c, key);
       const allCampaigns = [...c.campaigns, ...c.bisonCampaigns];
@@ -124,11 +133,14 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       switch (filter) {
         case 'all':
         case 'hidden':
+        case 'client-paused':
           return true;
         case 'risk':
           return d.status === 'risk';
         case 'ok':
           return d.status === 'ok';
+        case 'done':
+          return d.metTarget;
         case 'active':
           return hasRunning;
         case 'paused':
@@ -142,9 +154,18 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           return true;
       }
     });
-    if (sortByLeft) {
+    // Date-range filter (applied after subset filtering, before sorts).
+    if (dateRange.from || dateRange.to) {
+      list = list.filter((c) => {
+        if (!c.start_date) return false;
+        if (dateRange.from && c.start_date < dateRange.from) return false;
+        if (dateRange.to && c.start_date > dateRange.to) return false;
+        return true;
+      });
+    }
+    if (sortBy === 'leftWeek') {
       list = [...list].sort((a, b) => derive(b, key).leftThisWeek - derive(a, key).leftThisWeek);
-    } else if (sortByClient === 'campaigns') {
+    } else if (sortBy === 'campaigns') {
       const score = (c: DashboardClient) => {
         const all = [...c.campaigns, ...c.bisonCampaigns];
         const active = all.filter((x) => x.status === 'running').length;
@@ -157,23 +178,52 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         if (sb.total !== sa.total) return sb.total - sa.total;
         return a.name.localeCompare(b.name);
       });
+    } else if (sortBy === 'lastIntro') {
+      // Most-recent intro first; clients with no intro sink to the bottom.
+      list = [...list].sort((a, b) => {
+        const ai = a.metricsByWeek[key]?.last_corofy_intro_at;
+        const bi = b.metricsByWeek[key]?.last_corofy_intro_at;
+        const at = ai ? new Date(ai).getTime() : 0;
+        const bt = bi ? new Date(bi).getTime() : 0;
+        if (at === 0 && bt === 0) return a.name.localeCompare(b.name);
+        if (at === 0) return 1;
+        if (bt === 0) return -1;
+        return bt - at;
+      });
+    } else if (sortBy === 'emails') {
+      list = [...list].sort((a, b) => derive(b, key).emails - derive(a, key).emails);
     }
     return list;
-  }, [clients, filter, sortByLeft, sortByClient, key]);
+  }, [clients, filter, sortBy, dateRange, key]);
 
   const summary = useMemo(() => {
+    // Counters exclude hidden + client_paused clients — those are off-roster
+    // for the day-to-day. clientPaused gets its own counter so we can show
+    // it on its dedicated card.
     let total = 0;
     let risk = 0;
     let ok = 0;
+    let done = 0;
     let intros = 0;
     let emails = 0;
+    let target = 0;
+    let clientPaused = 0;
+    const plans = { minimum: 0, production: 0, partner: 0 };
     let convNum = 0;
     let convDen = 0;
     clients.forEach((c) => {
+      if (c.hidden) return;
+      if (c.client_paused) {
+        clientPaused++;
+        return;
+      }
       total++;
+      target += c.weekly_target;
+      plans[c.plan]++;
       const d = derive(c, key);
       if (d.status === 'risk') risk++;
       if (d.status === 'ok') ok++;
+      if (d.metTarget) done++;
       intros += d.intros;
       emails += d.emails;
       if (d.emails > 0) {
@@ -185,8 +235,12 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       total,
       risk,
       ok,
+      done,
       intros,
       emails,
+      target,
+      clientPaused,
+      plans,
       conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) + '%' : '—',
     };
   }, [clients, key]);
@@ -264,9 +318,11 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             id: client.id,
             campaign_size: 0,
             hidden: false,
+            client_paused: false,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},
+            portalActive: false,
           },
         ]);
         setToast('Client added');
@@ -314,9 +370,27 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         body: JSON.stringify({ id, hidden }),
       });
       if (!res.ok) throw new Error(await res.text());
-      setToast(hidden ? 'Client hidden · Show Hidden to recover' : 'Client unhidden');
+      setToast(hidden ? 'Client hidden · click Hidden tab to recover' : 'Client unhidden');
     } catch (err) {
       setClients((list) => list.map((c) => (c.id === id ? { ...c, hidden: !hidden } : c)));
+      setToast(`Failed: ${(err as Error).message.slice(0, 80)}`);
+    }
+  }
+
+  async function toggleClientPaused(id: string, client_paused: boolean) {
+    setClients((list) => list.map((c) => (c.id === id ? { ...c, client_paused } : c)));
+    try {
+      const res = await fetch('/api/clients', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, client_paused }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setToast(client_paused
+        ? 'Client paused · click Client Paused tab to recover'
+        : 'Client resumed');
+    } catch (err) {
+      setClients((list) => list.map((c) => (c.id === id ? { ...c, client_paused: !client_paused } : c)));
       setToast(`Failed: ${(err as Error).message.slice(0, 80)}`);
     }
   }
@@ -400,6 +474,14 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           <SummaryCard label="At Risk" cls="n-risk" num={summary.risk} sub="below half target" />
           <SummaryCard label="On Track" cls="n-ok" num={summary.ok} sub="meeting target this week" />
           <SummaryCard label="Intros Sent" cls="n-intros" num={summary.intros} sub="across all clients" />
+          <SummaryCard label="Intros Target" cls="n-target" num={summary.target} sub="weekly across all clients" />
+          <SummaryCard label="Client Paused" cls="n-cpaused" num={summary.clientPaused} sub="manually paused" />
+          <SummaryCard
+            label="By Plan"
+            cls="n-plan"
+            num={`${summary.plans.minimum} · ${summary.plans.production} · ${summary.plans.partner}`}
+            sub="min · prod · partner"
+          />
           <SummaryCard
             label="Emails Sent"
             cls="n-emails"
@@ -421,10 +503,56 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <button className={'fpill' + (filter === 'all' ? ' active' : '')} onClick={() => setFilter('all')}>All</button>
               <button className={'fpill f-risk' + (filter === 'risk' ? ' active' : '')} onClick={() => setFilter('risk')}>At Risk</button>
               <button className={'fpill f-ok' + (filter === 'ok' ? ' active' : '')} onClick={() => setFilter('ok')}>On Track</button>
+              <button className={'fpill f-ok' + (filter === 'done' ? ' active' : '')} onClick={() => setFilter('done')} title="Clients who reached their weekly intro target">Done</button>
               <button className={'fpill' + (filter === 'active' ? ' active' : '')} onClick={() => setFilter('active')} title="Clients with at least one running campaign">Active</button>
               <button className={'fpill' + (filter === 'paused' ? ' active' : '')} onClick={() => setFilter('paused')} title="Clients whose campaigns are paused or finished (no running)">Paused</button>
               <button className={'fpill' + (filter === 'inactive' ? ' active' : '')} onClick={() => setFilter('inactive')} title="Clients with no campaign launched yet">Inactive</button>
+              <button className={'fpill' + (filter === 'client-paused' ? ' active' : '')} onClick={() => setFilter('client-paused')} title="Clients you've manually paused">Client Paused</button>
               <button className={'fpill' + (filter === 'hidden' ? ' active' : '')} onClick={() => setFilter('hidden')} title="Only hidden clients">Hidden</button>
+              <div style={{ position: 'relative' }}>
+                <button
+                  className={'fpill date-pill' + (dateRange.from || dateRange.to ? ' active' : '')}
+                  onClick={() => setDatePopoverOpen((v) => !v)}
+                  title="Filter by client start date"
+                >
+                  📅 {dateRange.from || dateRange.to
+                    ? `${dateRange.from ?? '…'} → ${dateRange.to ?? '…'}`
+                    : 'Date'}
+                </button>
+                {datePopoverOpen && (
+                  <div className="date-popover">
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' }}>From
+                      <input
+                        type="date"
+                        value={dateRange.from ?? ''}
+                        onChange={(e) => setDateRange((r) => ({ ...r, from: e.target.value || null }))}
+                      />
+                    </label>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' }}>To
+                      <input
+                        type="date"
+                        value={dateRange.to ?? ''}
+                        onChange={(e) => setDateRange((r) => ({ ...r, to: e.target.value || null }))}
+                      />
+                    </label>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                      <button
+                        className="btn-secondary"
+                        style={{ flex: 1, padding: '6px 10px', fontSize: 12 }}
+                        onClick={() => {
+                          setDateRange({ from: null, to: null });
+                          setDatePopoverOpen(false);
+                        }}
+                      >Clear</button>
+                      <button
+                        className="btn-primary"
+                        style={{ flex: 1, padding: '6px 10px', fontSize: 12 }}
+                        onClick={() => setDatePopoverOpen(false)}
+                      >Done</button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           <div className="table-scroll">
@@ -440,31 +568,38 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                 <thead>
                   <tr>
                     <th
-                      className={'sortable' + (sortByClient === 'campaigns' ? ' sorted' : '')}
-                      onClick={() => {
-                        setSortByClient((v) => (v === 'campaigns' ? null : 'campaigns'));
-                        setSortByLeft(false);
-                      }}
+                      className={'sortable' + (sortBy === 'campaigns' ? ' sorted' : '')}
+                      onClick={() => setSortBy((v) => (v === 'campaigns' ? null : 'campaigns'))}
                       title="Sort by # of active campaigns"
                     >
-                      Client <em className="sort-icon">{sortByClient === 'campaigns' ? '↓' : '↕'}</em>
+                      Client <em className="sort-icon">{sortBy === 'campaigns' ? '↓' : '↕'}</em>
                     </th>
-                    <th>Emails Sent</th>
+                    <th
+                      className={'sortable' + (sortBy === 'emails' ? ' sorted' : '')}
+                      onClick={() => setSortBy((v) => (v === 'emails' ? null : 'emails'))}
+                      title="Sort by emails sent this week (highest first)"
+                    >
+                      Emails Sent <em className="sort-icon">{sortBy === 'emails' ? '↓' : '↕'}</em>
+                    </th>
                     <th>Intros This Week</th>
                     <th>Conv. Rate</th>
                     <th
-                      className={'sortable' + (sortByLeft ? ' sorted' : '')}
-                      onClick={() => {
-                        setSortByLeft((v) => !v);
-                        setSortByClient(null);
-                      }}
+                      className={'sortable' + (sortBy === 'leftWeek' ? ' sorted' : '')}
+                      onClick={() => setSortBy((v) => (v === 'leftWeek' ? null : 'leftWeek'))}
                     >
-                      Left This Week <em className="sort-icon">{sortByLeft ? '↓' : '↕'}</em>
+                      Left This Week <em className="sort-icon">{sortBy === 'leftWeek' ? '↓' : '↕'}</em>
                     </th>
                     <th>Campaign Progress</th>
-                    <th>Last Intro</th>
+                    <th
+                      className={'sortable' + (sortBy === 'lastIntro' ? ' sorted' : '')}
+                      onClick={() => setSortBy((v) => (v === 'lastIntro' ? null : 'lastIntro'))}
+                      title="Sort by most recent intro"
+                    >
+                      Last Intro <em className="sort-icon">{sortBy === 'lastIntro' ? '↓' : '↕'}</em>
+                    </th>
                     <th>Status</th>
                     <th>Plan</th>
+                    <th>Portal</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
@@ -482,6 +617,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       onEdit={() => openEditModal(c)}
                       onDelete={() => deleteClient(c.id)}
                       onToggleHidden={(h) => toggleHidden(c.id, h)}
+                      onToggleClientPaused={(p) => toggleClientPaused(c.id, p)}
                     />
                   ))}
                 </tbody>
@@ -792,6 +928,7 @@ function ClientRow({
   onEdit,
   onDelete,
   onToggleHidden,
+  onToggleClientPaused,
 }: {
   client: DashboardClient;
   weekKey: string;
@@ -800,6 +937,7 @@ function ClientRow({
   onShowCampaigns: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onToggleClientPaused: (paused: boolean) => void;
   onToggleHidden: (hidden: boolean) => void;
 }) {
   const d = derive(client, wk);
@@ -964,12 +1102,16 @@ function ClientRow({
       })
     : null;
 
+  const rowCls = client.hidden ? 'is-hidden' : client.client_paused ? 'is-client-paused' : '';
   return (
-    <tr className={client.hidden ? 'is-hidden' : ''}>
+    <tr className={rowCls}>
       <td className="client-cell">
         <div className="client-name">
           {client.name}
           {client.hidden && <span className="hidden-badge">Hidden</span>}
+          {!client.hidden && client.client_paused && (
+            <span className="client-paused-badge">Client Paused</span>
+          )}
         </div>
         {since && <div className="client-since">Since {since}</div>}
         <div
@@ -1000,8 +1142,20 @@ function ClientRow({
       <td>{statusCell}</td>
       <td><span className={`plan-badge ${PLAN_BADGE_CLASS[client.plan]}`}>{PLAN_LABEL[client.plan]}</span></td>
       <td>
+        {client.portalActive
+          ? <span className="portal-ok" title="Portal active in Corofy / MasterInbox">✓</span>
+          : <span className="portal-none" title="Not in Corofy portals (or portal disabled)">—</span>}
+      </td>
+      <td>
         <div className="actions">
           <button className="btn-icon" title="Edit" onClick={onEdit}>✏️</button>
+          <button
+            className="btn-icon"
+            title={client.client_paused ? 'Resume client' : 'Pause client'}
+            onClick={() => onToggleClientPaused(!client.client_paused)}
+          >
+            {client.client_paused ? '▶' : '⏸'}
+          </button>
           <button
             className="btn-icon"
             title={client.hidden ? 'Unhide client' : 'Hide client'}

@@ -21,6 +21,8 @@ function token(): string {
 export interface CorofyIntro {
   client_name: string;
   assigned_at: string; // ISO 8601 UTC
+  lead_email?: string | null;
+  lead_name?: string | null;
 }
 
 interface CorofyIntrosResp {
