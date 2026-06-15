@@ -319,6 +319,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             campaign_size: 0,
             hidden: false,
             client_paused: false,
+            portal_active: false,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},

@@ -17,9 +17,12 @@ export function generateSeed(): DashboardClient[] {
   });
 
   // For seed/preview we hand out one fictional "current week" metrics row per client.
-  // The map() below fills hidden / client_paused / portalActive so the literals
-  // here can omit them.
-  const seed: Omit<DashboardClient, 'hidden' | 'client_paused' | 'portalActive'>[] = [
+  // The map() below fills hidden / client_paused / portal_active / portalActive
+  // so the literals here can omit them.
+  const seed: Omit<
+    DashboardClient,
+    'hidden' | 'client_paused' | 'portal_active' | 'portalActive'
+  >[] = [
     {
       id: 'de001',
       name: 'Douglas Elliman',
@@ -144,5 +147,11 @@ export function generateSeed(): DashboardClient[] {
     },
   ];
 
-  return seed.map((c) => ({ ...c, hidden: false, client_paused: false, portalActive: false }));
+  return seed.map((c) => ({
+    ...c,
+    hidden: false,
+    client_paused: false,
+    portal_active: false,
+    portalActive: false,
+  }));
 }

@@ -21,13 +21,21 @@ import {
 } from '../lib/bison';
 import { addDays, getMondayOf, normalizeName, weekKey } from '../lib/derive';
 import { listCorofyIntros } from '../lib/corofy';
+import { listCorofyPortals } from '../lib/portals';
 import { autoMatchCampaignIds } from '../lib/matchCampaigns';
 import { HISTORICAL_WEEKS } from '../lib/types';
 
 interface SyncResult {
   instantly: { ok: boolean; error?: string; campaigns?: number; weeksBackfilled?: number };
   bison: { ok: boolean; error?: string; campaigns?: number; weeksBackfilled?: number; skipped?: boolean };
-  corofy: { ok: boolean; error?: string; intros?: number; skipped?: boolean; unmatched?: string[] };
+  corofy: {
+    ok: boolean;
+    error?: string;
+    intros?: number;
+    skipped?: boolean;
+    unmatched?: string[];
+    portalsMatched?: number; // # clients flipped to portal_active=true
+  };
 }
 
 
@@ -473,8 +481,51 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       );
     }
 
+    // Piggyback portal sync on the same cron tick. Corofy's /api/clients/portals
+    // is only reachable from sync-worker's Railway edge (the web service gets
+    // 307 → /login), so we fetch + persist here. Failures are non-fatal: we
+    // log and keep the existing portal_active values.
+    let portalsMatched = 0;
+    try {
+      const portals = await listCorofyPortals();
+      if (portals.length > 0) {
+        const activeNames = new Set<string>();
+        for (const p of portals) {
+          if (p.portal_enabled) {
+            activeNames.add(normalizeName(p.name));
+            for (const a of p.aliases ?? []) activeNames.add(normalizeName(a));
+          }
+        }
+        const { data: allClients } = await sb.from('clients').select('id, name');
+        const now = new Date().toISOString();
+        const portalUpserts: { id: string; portal_active: boolean; portal_synced_at: string }[] = [];
+        for (const c of (allClients ?? []) as { id: string; name: string }[]) {
+          const active = activeNames.has(normalizeName(c.name));
+          if (active) portalsMatched++;
+          portalUpserts.push({ id: c.id, portal_active: active, portal_synced_at: now });
+        }
+        if (portalUpserts.length > 0) {
+          // upsert by primary key (id) — onConflict ensures we update, not insert.
+          const { error } = await sb
+            .from('clients')
+            .upsert(portalUpserts, { onConflict: 'id', ignoreDuplicates: false });
+          if (error) console.warn(`[corofy] portal upsert failed: ${error.message}`);
+        }
+        console.warn(`[corofy] portals synced: ${portalsMatched}/${(allClients ?? []).length} clients active`);
+      } else {
+        console.warn('[corofy] portals fetch returned empty — leaving portal_active values unchanged');
+      }
+    } catch (e) {
+      console.warn(`[corofy] portals sync failed: ${(e as Error).message}`);
+    }
+
     await sb.from('sync_runs').update({ ok: true, finished_at: new Date().toISOString() }).eq('id', run?.id);
-    return { ok: true, intros: intros.length, unmatched: unmatched.length > 0 ? unmatched : undefined };
+    return {
+      ok: true,
+      intros: intros.length,
+      unmatched: unmatched.length > 0 ? unmatched : undefined,
+      portalsMatched,
+    };
   } catch (err) {
     const message = (err as Error).message;
     await sb

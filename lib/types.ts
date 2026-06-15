@@ -35,6 +35,7 @@ export interface Client {
   campaign_size: number;
   hidden: boolean;        // manual per-client hide flag (default false)
   client_paused: boolean; // manual "service temporarily paused" flag (default false)
+  portal_active: boolean; // synced from Corofy /api/clients/portals by sync-worker
 }
 
 export interface WeeklyMetric {
