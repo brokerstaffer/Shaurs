@@ -498,20 +498,29 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
         }
         const { data: allClients } = await sb.from('clients').select('id, name');
         const now = new Date().toISOString();
-        const portalUpserts: { id: string; portal_active: boolean; portal_synced_at: string }[] = [];
+        // Use .update() per row instead of .upsert() — Supabase upsert validates
+        // each row as a candidate INSERT, which trips clients.name NOT NULL even
+        // though every id we have here exists. .update().eq('id', ...) skips
+        // the INSERT path entirely.
+        let updateErrors = 0;
         for (const c of (allClients ?? []) as { id: string; name: string }[]) {
           const active = activeNames.has(normalizeName(c.name));
           if (active) portalsMatched++;
-          portalUpserts.push({ id: c.id, portal_active: active, portal_synced_at: now });
-        }
-        if (portalUpserts.length > 0) {
-          // upsert by primary key (id) — onConflict ensures we update, not insert.
           const { error } = await sb
             .from('clients')
-            .upsert(portalUpserts, { onConflict: 'id', ignoreDuplicates: false });
-          if (error) console.warn(`[corofy] portal upsert failed: ${error.message}`);
+            .update({ portal_active: active, portal_synced_at: now })
+            .eq('id', c.id);
+          if (error) {
+            updateErrors++;
+            if (updateErrors <= 3) {
+              console.warn(`[corofy] portal update failed for ${c.name}: ${error.message}`);
+            }
+          }
         }
-        console.warn(`[corofy] portals synced: ${portalsMatched}/${(allClients ?? []).length} clients active`);
+        if (updateErrors > 3) {
+          console.warn(`[corofy] ...${updateErrors - 3} more portal update errors suppressed`);
+        }
+        console.warn(`[corofy] portals synced: ${portalsMatched}/${(allClients ?? []).length} clients active (${updateErrors} write errors)`);
       } else {
         console.warn('[corofy] portals fetch returned empty — leaving portal_active values unchanged');
       }
