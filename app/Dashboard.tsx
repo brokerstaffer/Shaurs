@@ -24,7 +24,12 @@ import {
 
 type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' | 'client-paused' | 'hidden';
 
-type SortBy = null | 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails';
+type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
+
+type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails';
+type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
+
+type DatePreset = 'last7' | 'last30' | 'ytd' | 'custom' | null;
 
 interface Props {
   initialClients: DashboardClient[];
@@ -80,12 +85,12 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [clients, setClients] = useState<DashboardClient[]>(initialClients);
   const [currentMonday, setCurrentMonday] = useState<Date>(() => getMondayOf(new Date()));
   const [filter, setFilter] = useState<Filter>('all');
-  // Unified sort state. null = default (name asc, server-provided).
-  // 'campaigns' = by # active campaigns desc; 'leftWeek' = by leftThisWeek desc;
-  // 'lastIntro' = by last_intro_at desc (clients with no intro sink); 'emails'
-  // = by emails_sent desc.
+  const [planFilter, setPlanFilter] = useState<PlanFilter>('all');
+  // Unified sort state. null = default order (server-provided name asc).
+  // { col, dir: 'desc' } = 1st click; { col, dir: 'asc' } = 2nd click; null = 3rd.
   const [sortBy, setSortBy] = useState<SortBy>(null);
   const [dateRange, setDateRange] = useState<{ from: string | null; to: string | null }>({ from: null, to: null });
+  const [datePreset, setDatePreset] = useState<DatePreset>(null);
   const [datePopoverOpen, setDatePopoverOpen] = useState(false);
   const [campaignSelections, setCampaignSelections] = useState<Record<string, string>>({});
   const [campaignsPopupClientId, setCampaignsPopupClientId] = useState<string | null>(null);
@@ -154,6 +159,10 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           return true;
       }
     });
+    // Plan filter (orthogonal to the other filter pills).
+    if (planFilter !== 'all') {
+      list = list.filter((c) => c.plan === planFilter);
+    }
     // Date-range filter (applied after subset filtering, before sorts).
     if (dateRange.from || dateRange.to) {
       list = list.filter((c) => {
@@ -163,9 +172,11 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         return true;
       });
     }
-    if (sortBy === 'leftWeek') {
-      list = [...list].sort((a, b) => derive(b, key).leftThisWeek - derive(a, key).leftThisWeek);
-    } else if (sortBy === 'campaigns') {
+    if (sortBy?.col === 'leftWeek') {
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => mul * (derive(b, key).leftThisWeek - derive(a, key).leftThisWeek));
+    } else if (sortBy?.col === 'campaigns') {
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
       const score = (c: DashboardClient) => {
         const all = [...c.campaigns, ...c.bisonCampaigns];
         const active = all.filter((x) => x.status === 'running').length;
@@ -174,12 +185,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       list = [...list].sort((a, b) => {
         const sa = score(a);
         const sb = score(b);
-        if (sb.active !== sa.active) return sb.active - sa.active;
-        if (sb.total !== sa.total) return sb.total - sa.total;
+        if (sb.active !== sa.active) return mul * (sb.active - sa.active);
+        if (sb.total !== sa.total) return mul * (sb.total - sa.total);
         return a.name.localeCompare(b.name);
       });
-    } else if (sortBy === 'lastIntro') {
-      // Most-recent intro first; clients with no intro sink to the bottom.
+    } else if (sortBy?.col === 'lastIntro') {
+      // Clients with no intro always sink to the bottom regardless of direction.
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
       list = [...list].sort((a, b) => {
         const ai = a.metricsByWeek[key]?.last_corofy_intro_at;
         const bi = b.metricsByWeek[key]?.last_corofy_intro_at;
@@ -188,13 +200,49 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         if (at === 0 && bt === 0) return a.name.localeCompare(b.name);
         if (at === 0) return 1;
         if (bt === 0) return -1;
-        return bt - at;
+        return mul * (bt - at);
       });
-    } else if (sortBy === 'emails') {
-      list = [...list].sort((a, b) => derive(b, key).emails - derive(a, key).emails);
+    } else if (sortBy?.col === 'emails') {
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => mul * (derive(b, key).emails - derive(a, key).emails));
     }
     return list;
-  }, [clients, filter, sortBy, dateRange, key]);
+  }, [clients, filter, planFilter, sortBy, dateRange, key]);
+
+  // 1st click = desc (highest first), 2nd = asc, 3rd = reset.
+  function cycleSort(col: SortCol) {
+    setSortBy((cur) => {
+      if (!cur || cur.col !== col) return { col, dir: 'desc' };
+      if (cur.dir === 'desc') return { col, dir: 'asc' };
+      return null;
+    });
+  }
+  function sortIcon(col: SortCol): string {
+    if (sortBy?.col !== col) return '↕';
+    return sortBy.dir === 'desc' ? '↓' : '↑';
+  }
+
+  function applyDatePreset(p: 'last7' | 'last30' | 'ytd') {
+    const today = new Date();
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    let from: string;
+    if (p === 'last7') {
+      from = iso(addDays(today, -6));
+    } else if (p === 'last30') {
+      from = iso(addDays(today, -29));
+    } else {
+      from = `${today.getUTCFullYear()}-01-01`;
+    }
+    setDateRange({ from, to: iso(today) });
+    setDatePreset(p);
+  }
+
+  const PRESET_LABEL: Record<Exclude<DatePreset, null>, string> = {
+    last7: 'Last 7 days',
+    last30: 'Last 30 days',
+    ytd: 'Year to date',
+    custom: `${dateRange.from ?? '…'} → ${dateRange.to ?? '…'}`,
+  };
 
   const summary = useMemo(() => {
     // Counters exclude hidden + client_paused clients — those are off-roster
@@ -510,30 +558,60 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <button className={'fpill' + (filter === 'inactive' ? ' active' : '')} onClick={() => setFilter('inactive')} title="Clients with no campaign launched yet">Inactive</button>
               <button className={'fpill' + (filter === 'client-paused' ? ' active' : '')} onClick={() => setFilter('client-paused')} title="Clients you've manually paused">Client Paused</button>
               <button className={'fpill' + (filter === 'hidden' ? ' active' : '')} onClick={() => setFilter('hidden')} title="Only hidden clients">Hidden</button>
+              <select
+                className={'plan-select' + (planFilter !== 'all' ? ' active' : '')}
+                value={planFilter}
+                onChange={(e) => setPlanFilter(e.target.value as PlanFilter)}
+                title="Filter by plan"
+              >
+                <option value="all">All Plans</option>
+                <option value="minimum">Minimum</option>
+                <option value="production">Production</option>
+                <option value="partner">Partner</option>
+              </select>
               <div style={{ position: 'relative' }}>
                 <button
-                  className={'fpill date-pill' + (dateRange.from || dateRange.to ? ' active' : '')}
+                  className={'fpill date-pill' + (datePreset ? ' active' : '')}
                   onClick={() => setDatePopoverOpen((v) => !v)}
                   title="Filter by client start date"
                 >
-                  📅 {dateRange.from || dateRange.to
-                    ? `${dateRange.from ?? '…'} → ${dateRange.to ?? '…'}`
-                    : 'Date'}
+                  📅 {datePreset ? PRESET_LABEL[datePreset] : 'Date'}
                 </button>
                 {datePopoverOpen && (
                   <div className="date-popover">
+                    <div className="date-presets">
+                      <button
+                        className={'preset-btn' + (datePreset === 'last7' ? ' active' : '')}
+                        onClick={() => applyDatePreset('last7')}
+                      >Last 7 Days</button>
+                      <button
+                        className={'preset-btn' + (datePreset === 'last30' ? ' active' : '')}
+                        onClick={() => applyDatePreset('last30')}
+                      >Last 30 Days</button>
+                      <button
+                        className={'preset-btn' + (datePreset === 'ytd' ? ' active' : '')}
+                        onClick={() => applyDatePreset('ytd')}
+                      >Year to Date</button>
+                    </div>
+                    <div className="date-popover-divider" />
                     <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' }}>From
                       <input
                         type="date"
                         value={dateRange.from ?? ''}
-                        onChange={(e) => setDateRange((r) => ({ ...r, from: e.target.value || null }))}
+                        onChange={(e) => {
+                          setDateRange((r) => ({ ...r, from: e.target.value || null }));
+                          setDatePreset(e.target.value ? 'custom' : null);
+                        }}
                       />
                     </label>
                     <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' }}>To
                       <input
                         type="date"
                         value={dateRange.to ?? ''}
-                        onChange={(e) => setDateRange((r) => ({ ...r, to: e.target.value || null }))}
+                        onChange={(e) => {
+                          setDateRange((r) => ({ ...r, to: e.target.value || null }));
+                          setDatePreset(e.target.value ? 'custom' : null);
+                        }}
                       />
                     </label>
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
@@ -542,6 +620,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                         style={{ flex: 1, padding: '6px 10px', fontSize: 12 }}
                         onClick={() => {
                           setDateRange({ from: null, to: null });
+                          setDatePreset(null);
                           setDatePopoverOpen(false);
                         }}
                       >Clear</button>
@@ -569,34 +648,35 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                 <thead>
                   <tr>
                     <th
-                      className={'sortable' + (sortBy === 'campaigns' ? ' sorted' : '')}
-                      onClick={() => setSortBy((v) => (v === 'campaigns' ? null : 'campaigns'))}
-                      title="Sort by # of active campaigns"
+                      className={'sortable' + (sortBy?.col === 'campaigns' ? ' sorted' : '')}
+                      onClick={() => cycleSort('campaigns')}
+                      title="Sort by # of active campaigns — click to cycle desc / asc / reset"
                     >
-                      Client <em className="sort-icon">{sortBy === 'campaigns' ? '↓' : '↕'}</em>
+                      Client <em className="sort-icon">{sortIcon('campaigns')}</em>
                     </th>
                     <th
-                      className={'sortable' + (sortBy === 'emails' ? ' sorted' : '')}
-                      onClick={() => setSortBy((v) => (v === 'emails' ? null : 'emails'))}
-                      title="Sort by emails sent this week (highest first)"
+                      className={'sortable' + (sortBy?.col === 'emails' ? ' sorted' : '')}
+                      onClick={() => cycleSort('emails')}
+                      title="Sort by emails sent this week — click to cycle desc / asc / reset"
                     >
-                      Emails Sent <em className="sort-icon">{sortBy === 'emails' ? '↓' : '↕'}</em>
+                      Emails Sent <em className="sort-icon">{sortIcon('emails')}</em>
                     </th>
                     <th>Intros This Week</th>
                     <th>Conv. Rate</th>
                     <th
-                      className={'sortable' + (sortBy === 'leftWeek' ? ' sorted' : '')}
-                      onClick={() => setSortBy((v) => (v === 'leftWeek' ? null : 'leftWeek'))}
+                      className={'sortable' + (sortBy?.col === 'leftWeek' ? ' sorted' : '')}
+                      onClick={() => cycleSort('leftWeek')}
+                      title="Sort by intros left this week — click to cycle desc / asc / reset"
                     >
-                      Left This Week <em className="sort-icon">{sortBy === 'leftWeek' ? '↓' : '↕'}</em>
+                      Left This Week <em className="sort-icon">{sortIcon('leftWeek')}</em>
                     </th>
                     <th>Campaign Progress</th>
                     <th
-                      className={'sortable' + (sortBy === 'lastIntro' ? ' sorted' : '')}
-                      onClick={() => setSortBy((v) => (v === 'lastIntro' ? null : 'lastIntro'))}
-                      title="Sort by most recent intro"
+                      className={'sortable' + (sortBy?.col === 'lastIntro' ? ' sorted' : '')}
+                      onClick={() => cycleSort('lastIntro')}
+                      title="Sort by last intro time — click to cycle desc / asc / reset"
                     >
-                      Last Intro <em className="sort-icon">{sortBy === 'lastIntro' ? '↓' : '↕'}</em>
+                      Last Intro <em className="sort-icon">{sortIcon('lastIntro')}</em>
                     </th>
                     <th>Status</th>
                     <th>Plan</th>
